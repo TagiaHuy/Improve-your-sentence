@@ -1,0 +1,10 @@
+{
+	"id": "improve-your-sentence",
+	"name": "Improve Your Sentence",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Select a sentence and spawn an AI window to see improved versions and chat with AI.",
+	"author": "TaGiaHuy",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

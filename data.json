@@ -1,0 +1,10 @@
+{
+  "provider": "gemini",
+  "openAiApiKey": "",
+  "geminiApiKey": "AIzaSyDm0WHrDHxhszGpVdREv8U4_2m_CrXOgkI",
+  "openRouterApiKey": "",
+  "openAiModel": "gpt-4o",
+  "geminiModel": "gemini-2.5-flash-lite",
+  "openRouterModel": "openai/gpt-4o",
+  "systemPrompt": "Analyze the following sentence.\ncheck  if the grammar correct or not, explain and \nProvide the syntactically correct and natural version of the sentence.\nThen, provide 3 alternative versions (e.g., more professional, creative, or concise).\nFormat your response using Markdown, starting with \"## Corrected Version:\", followed by \"## Alternatives:\", and present the alternatives as a numbered list.\nOutput nothing else."
+}

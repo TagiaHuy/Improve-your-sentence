@@ -1,0 +1,117 @@
+.improve-sentence-modal, .improve-sentence-view-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.improve-sentence-modal {
+    height: 80vh;
+    max-height: 800px;
+}
+
+.sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 10px;
+    margin-bottom: 5px;
+}
+
+.refresh-icon {
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.2s;
+    display: flex;
+    align-items: center;
+}
+
+.refresh-icon:hover {
+    color: var(--text-normal);
+}
+
+.original-sentence-box {
+    background-color: var(--background-secondary-alt);
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.chat-container {
+    flex-grow: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    background-color: var(--background-secondary);
+}
+
+.chat-message {
+    display: flex;
+    width: 100%;
+}
+
+.chat-message.user {
+    justify-content: flex-end;
+}
+
+.chat-message.assistant {
+    justify-content: flex-start;
+}
+
+.chat-message .bubble {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 8px;
+    line-height: 1.4;
+}
+
+.chat-message.user .bubble {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+    border-bottom-right-radius: 0;
+}
+
+.chat-message.assistant .bubble {
+    background-color: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-bottom-left-radius: 0;
+    color: var(--text-normal);
+}
+
+/* Fix markdown headers padding inside assistant bubble */
+.chat-message.assistant .bubble h2 {
+    margin-top: 5px;
+    font-size: 1.1em;
+}
+
+.chat-input-container {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding-bottom: 5px;
+}
+
+.chat-input-container.sidebar {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.chat-input-container.sidebar .chat-send-btn {
+    margin-top: 5px;
+}
+
+.chat-input {
+    flex-grow: 1;
+    resize: none;
+    border-radius: 6px;
+}
+
+.chat-send-btn {
+    padding: 8px 16px;
+    height: 100%;
+}
