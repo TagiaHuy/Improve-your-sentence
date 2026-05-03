@@ -39,15 +39,34 @@ var DEFAULT_SETTINGS = {
   openAiModel: "gpt-4o",
   geminiModel: "gemini-1.5-flash",
   openRouterModel: "openai/gpt-4o",
-  systemPrompt: `Analyze the following sentence.
+  customPrompts: [
+    {
+      id: "improve-sentence",
+      name: "Improve Sentence",
+      prompt: `Analyze the following sentence.
 Provide the syntactically correct and natural version of the sentence.
 Then, provide 3 alternative versions (e.g., more professional, creative, or concise).
 Format your response using Markdown, starting with "## Corrected Version:", followed by "## Alternatives:", and present the alternatives as a numbered list.
 Output nothing else.`
+    },
+    {
+      id: "check-grammar",
+      name: "Check Grammar",
+      prompt: "Check the grammar and spelling of the following text. Provide the corrected version and a brief explanation of the changes."
+    },
+    {
+      id: "translate-to-vn",
+      name: "Translate to Vietnamese",
+      prompt: "Translate the following text to Vietnamese."
+    }
+  ],
+  vocabulary: []
 };
 var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
+    this.vocabPage = 0;
+    this.vocabPageSize = 10;
     this.plugin = plugin;
   }
   display() {
@@ -101,12 +120,88 @@ var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingT
         })
       );
     }
-    new import_obsidian.Setting(containerEl).setName("System Prompt").setDesc("Customize how the AI should respond to the sentence selection.").addTextArea(
-      (text) => text.setPlaceholder("Enter system prompt...").setValue(this.plugin.settings.systemPrompt).onChange(async (value) => {
-        this.plugin.settings.systemPrompt = value;
+    containerEl.createEl("h3", { text: "Custom Prompts" });
+    this.plugin.settings.customPrompts.forEach((prompt, index) => {
+      const s = new import_obsidian.Setting(containerEl).setName(`Prompt ${index + 1}: ${prompt.name}`).setDesc("Description: " + (prompt.prompt.length > 50 ? prompt.prompt.substring(0, 50) + "..." : prompt.prompt));
+      s.addText(
+        (text) => text.setPlaceholder("Prompt Name").setValue(prompt.name).onChange(async (value) => {
+          prompt.name = value;
+          await this.plugin.saveSettings();
+        })
+      );
+      s.addExtraButton((cb) => {
+        cb.setIcon("trash").setTooltip("Delete Prompt").onClick(async () => {
+          this.plugin.settings.customPrompts.splice(index, 1);
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
+      new import_obsidian.Setting(containerEl).setName("Prompt Content").setDesc("The actual prompt sent to the AI.").addTextArea(
+        (text) => text.setPlaceholder("Enter system prompt...").setValue(prompt.prompt).onChange(async (value) => {
+          prompt.prompt = value;
+          await this.plugin.saveSettings();
+        })
+      );
+    });
+    new import_obsidian.Setting(containerEl).addButton(
+      (btn) => btn.setButtonText("Add New Prompt").setCta().onClick(async () => {
+        this.plugin.settings.customPrompts.push({
+          id: "custom-prompt-" + Date.now(),
+          name: "New Prompt",
+          prompt: ""
+        });
         await this.plugin.saveSettings();
+        this.display();
       })
     );
+    containerEl.createEl("h3", { text: "Vocabulary Management" });
+    if (this.plugin.settings.vocabulary.length === 0) {
+      containerEl.createEl("p", { text: "No vocabulary words saved yet.", cls: "setting-item-description" });
+    } else {
+      const tableWrapper = containerEl.createDiv({ cls: "vocab-table-wrapper" });
+      const table = tableWrapper.createEl("table", { cls: "vocab-table" });
+      const header = table.createEl("thead").createEl("tr");
+      header.createEl("th", { text: "Word" });
+      header.createEl("th", { text: "Added" });
+      header.createEl("th", { text: "Next Review" });
+      header.createEl("th", { text: "Actions" });
+      const tbody = table.createEl("tbody");
+      const sortedVocab = [...this.plugin.settings.vocabulary].sort((a, b) => a.nextReview - b.nextReview);
+      const start = this.vocabPage * this.vocabPageSize;
+      const end = start + this.vocabPageSize;
+      const pagedVocab = sortedVocab.slice(start, end);
+      pagedVocab.forEach((item) => {
+        const row = tbody.createEl("tr");
+        row.createEl("td", { text: item.word });
+        row.createEl("td", { text: new Date(item.dateAdded).toLocaleDateString() });
+        row.createEl("td", { text: new Date(item.nextReview).toLocaleDateString() });
+        const actionsCell = row.createEl("td");
+        const deleteBtn = actionsCell.createEl("button", { cls: "vocab-delete-btn" });
+        (0, import_obsidian.setIcon)(deleteBtn, "trash");
+        deleteBtn.addEventListener("click", async () => {
+          this.plugin.settings.vocabulary = this.plugin.settings.vocabulary.filter((v) => v !== item);
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
+      const pagination = containerEl.createDiv({ cls: "vocab-pagination" });
+      const totalPages = Math.ceil(sortedVocab.length / this.vocabPageSize);
+      const prevBtn = pagination.createEl("button", { text: "Previous", cls: "vocab-page-btn" });
+      if (this.vocabPage === 0)
+        prevBtn.disabled = true;
+      prevBtn.addEventListener("click", () => {
+        this.vocabPage--;
+        this.display();
+      });
+      pagination.createSpan({ text: ` Page ${this.vocabPage + 1} of ${totalPages} `, cls: "vocab-page-info" });
+      const nextBtn = pagination.createEl("button", { text: "Next", cls: "vocab-page-btn" });
+      if (this.vocabPage >= totalPages - 1)
+        nextBtn.disabled = true;
+      nextBtn.addEventListener("click", () => {
+        this.vocabPage++;
+        this.display();
+      });
+    }
   }
 };
 
@@ -259,10 +354,10 @@ async function* streamGemini(messages, apiKey, model) {
 // src/ImproveSentenceView.ts
 var IMPROVE_SENTENCE_VIEW_TYPE = "improve-sentence-view";
 var ImproveSentenceView = class extends import_obsidian2.ItemView {
-  constructor(leaf, plugin) {
+  constructor(leaf) {
     super(leaf);
     this.messages = [];
-    this.plugin = plugin;
+    this.selectedSuggestionIndex = -1;
   }
   getViewType() {
     return IMPROVE_SENTENCE_VIEW_TYPE;
@@ -274,6 +369,7 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
     return "message-square";
   }
   async onOpen() {
+    var _a;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("improve-sentence-view-container");
@@ -284,27 +380,144 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
     refreshBtn.setAttribute("aria-label", "Clear history");
     refreshBtn.addEventListener("click", () => this.clearHistory());
     this.chatContainer = contentEl.createDiv({ cls: "chat-container sidebar" });
+    this.chatContainer.addEventListener("contextmenu", (e) => {
+      var _a2;
+      const selection = (_a2 = window.getSelection()) == null ? void 0 : _a2.toString().trim();
+      if (selection) {
+        const menu = new import_obsidian2.Menu();
+        menu.addItem((item) => {
+          item.setTitle("Save to Vocabulary").setIcon("book-marked").onClick(async () => {
+            this.plugin.saveVocabulary(selection);
+          });
+        });
+        menu.showAtMouseEvent(e);
+      }
+    });
     const inputContainer = contentEl.createDiv({ cls: "chat-input-container sidebar" });
+    this.suggestionContainer = inputContainer.createDiv({ cls: "slash-suggestions", attr: { style: "display: none;" } });
     this.inputEl = inputContainer.createEl("textarea", { cls: "chat-input" });
-    this.inputEl.placeholder = "Type to chat...";
+    this.inputEl.placeholder = "Type / for commands...";
     this.inputEl.rows = 2;
     this.sendButton = inputContainer.createEl("button", { text: "Send", cls: "chat-send-btn" });
     this.sendButton.addEventListener("click", () => this.sendMessage());
     this.inputEl.addEventListener("keydown", (e) => {
+      if (this.suggestionContainer.style.display !== "none") {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          this.navigateSuggestions(1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          this.navigateSuggestions(-1);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          this.applySelectedSuggestion();
+        } else if (e.key === "Escape") {
+          this.hideSuggestions();
+        }
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
       }
     });
+    this.inputEl.addEventListener("input", () => {
+      const value = this.inputEl.value;
+      if (value.startsWith("/")) {
+        this.showSuggestions(value.substring(1));
+      } else {
+        this.hideSuggestions();
+      }
+    });
     if (this.messages.length === 0) {
-      this.messages.push({ role: "system", content: this.plugin.settings.systemPrompt });
+      this.messages.push({ role: "system", content: ((_a = this.plugin.settings.customPrompts[0]) == null ? void 0 : _a.prompt) || "" });
+    }
+  }
+  showSuggestions(query) {
+    const customPrompts = this.plugin.settings.customPrompts.filter(
+      (p) => p.name.toLowerCase().includes(query.toLowerCase())
+    );
+    const buildInSuggestions = [
+      { id: "test-vocab", name: "Test Recent Vocabulary", prompt: "AI helps you learn and test the 10 most recent words." }
+    ].filter((s) => s.name.toLowerCase().includes(query.toLowerCase()));
+    const allSuggestions = [...customPrompts, ...buildInSuggestions];
+    if (allSuggestions.length === 0) {
+      this.hideSuggestions();
+      return;
+    }
+    this.suggestionContainer.empty();
+    this.suggestionContainer.style.display = "block";
+    this.selectedSuggestionIndex = 0;
+    allSuggestions.forEach((suggestion, index) => {
+      const item = this.suggestionContainer.createDiv({ cls: "slash-suggestion-item" });
+      if (index === 0)
+        item.addClass("selected");
+      item.createSpan({ cls: "slash-suggestion-name", text: suggestion.name });
+      item.createSpan({ cls: "slash-suggestion-preview", text: suggestion.prompt.substring(0, 60) + (suggestion.prompt.length > 60 ? "..." : "") });
+      item.addEventListener("click", () => {
+        this.applySuggestion(suggestion);
+      });
+    });
+  }
+  hideSuggestions() {
+    this.suggestionContainer.style.display = "none";
+    this.selectedSuggestionIndex = -1;
+  }
+  navigateSuggestions(direction) {
+    var _a;
+    const items = this.suggestionContainer.querySelectorAll(".slash-suggestion-item");
+    if (items.length === 0)
+      return;
+    (_a = items[this.selectedSuggestionIndex]) == null ? void 0 : _a.removeClass("selected");
+    this.selectedSuggestionIndex = (this.selectedSuggestionIndex + direction + items.length) % items.length;
+    const selected = items[this.selectedSuggestionIndex];
+    selected.addClass("selected");
+    selected.scrollIntoView({ block: "nearest" });
+  }
+  applySelectedSuggestion() {
+    var _a, _b;
+    const items = this.suggestionContainer.querySelectorAll(".slash-suggestion-item");
+    const selectedLabel = (_b = (_a = items[this.selectedSuggestionIndex]) == null ? void 0 : _a.querySelector(".slash-suggestion-name")) == null ? void 0 : _b.textContent;
+    if (!selectedLabel)
+      return;
+    if (selectedLabel === "Test Recent Vocabulary") {
+      this.applySuggestion({ id: "test-vocab", name: "Test Recent Vocabulary" });
+    } else {
+      const prompt = this.plugin.settings.customPrompts.find((p) => p.name === selectedLabel);
+      if (prompt)
+        this.applySuggestion(prompt);
+    }
+  }
+  applySuggestion(suggestion) {
+    if (suggestion.id === "test-vocab") {
+      this.hideSuggestions();
+      this.inputEl.value = "";
+      this.plugin.testRecentVocabulary();
+    } else {
+      this.inputEl.value = `/${suggestion.name} `;
+      this.hideSuggestions();
+      this.inputEl.focus();
     }
   }
   async sendMessage() {
-    const text = this.inputEl.value.trim();
+    var _a;
+    let text = this.inputEl.value.trim();
     if (!text)
       return;
     this.inputEl.value = "";
+    let usedPrompt = ((_a = this.plugin.settings.customPrompts[0]) == null ? void 0 : _a.prompt) || "";
+    for (const prompt of this.plugin.settings.customPrompts) {
+      const cmd = `/${prompt.name}`;
+      if (text.startsWith(cmd)) {
+        usedPrompt = prompt.prompt;
+        text = text.substring(cmd.length).trim();
+        this.messages = [{ role: "system", content: usedPrompt }];
+        this.chatContainer.empty();
+        break;
+      }
+    }
+    if (!text)
+      return;
     this.messages.push({ role: "user", content: text });
     this.renderUserMessage(text);
     await this.generateAssistantResponse();
@@ -325,7 +538,7 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
       }
       this.messages[assistantMessageIdx].content = content;
       bubble.empty();
-      await import_obsidian2.MarkdownRenderer.renderMarkdown(content, bubble, "", this.plugin);
+      await this.parseAndRenderInteractiveComponents(content, bubble);
     } catch (e) {
       bubble.innerText += `
 Error: ${e.toString()}`;
@@ -335,6 +548,243 @@ Error: ${e.toString()}`;
       this.inputEl.focus();
       this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
     }
+  }
+  async parseAndRenderInteractiveComponents(content, container) {
+    const taggedRegex = /```json:(flashcards|quiz|assessment)\s*([\s\S]*?)\s*```/g;
+    const untaggedRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
+    let lastIndex = 0;
+    let matchFound = false;
+    let match;
+    const processedMatches = [];
+    while ((match = taggedRegex.exec(content)) !== null) {
+      matchFound = true;
+      processedMatches.push({ start: match.index, end: match.index + match[0].length });
+      const textBefore = content.substring(lastIndex, match.index);
+      if (textBefore.trim()) {
+        const textDiv = container.createDiv();
+        await import_obsidian2.MarkdownRenderer.renderMarkdown(textBefore, textDiv, "", this.plugin);
+      }
+      this.renderComponentByType(match[1], match[2], container);
+      lastIndex = match.index + match[0].length;
+    }
+    if (!matchFound) {
+      while ((match = untaggedRegex.exec(content)) !== null) {
+        const inner = match[1].trim();
+        const type = this.autodetectJsonType(inner);
+        if (type) {
+          matchFound = true;
+          processedMatches.push({ start: match.index, end: match.index + match[0].length });
+          const textBefore = content.substring(lastIndex, match.index);
+          if (textBefore.trim()) {
+            const textDiv = container.createDiv();
+            await import_obsidian2.MarkdownRenderer.renderMarkdown(textBefore, textDiv, "", this.plugin);
+          }
+          this.renderComponentByType(type, inner, container);
+          lastIndex = match.index + match[0].length;
+        }
+      }
+    }
+    if (!matchFound) {
+      const rawJsonRegex = /\{(?:[^{}]|\{[^{}]*\})*\}/g;
+      while ((match = rawJsonRegex.exec(content)) !== null) {
+        const type = this.autodetectJsonType(match[0]);
+        if (type) {
+          matchFound = true;
+          const textBefore = content.substring(lastIndex, match.index);
+          if (textBefore.trim()) {
+            const textDiv = container.createDiv();
+            await import_obsidian2.MarkdownRenderer.renderMarkdown(textBefore, textDiv, "", this.plugin);
+          }
+          this.renderComponentByType(type, match[0], container);
+          lastIndex = match.index + match[0].length;
+        }
+      }
+    }
+    const remainingText = content.substring(lastIndex);
+    if (remainingText.trim()) {
+      const textDiv = container.createDiv();
+      await import_obsidian2.MarkdownRenderer.renderMarkdown(remainingText, textDiv, "", this.plugin);
+    }
+  }
+  autodetectJsonType(jsonStr) {
+    try {
+      const data = JSON.parse(jsonStr);
+      if (data.items && Array.isArray(data.items))
+        return "flashcards";
+      if (data.questions && Array.isArray(data.questions))
+        return "quiz";
+      if (data.results && Array.isArray(data.results))
+        return "assessment";
+    } catch (e) {
+      const lower = jsonStr.toLowerCase();
+      if (lower.includes("items") && lower.includes("["))
+        return "flashcards";
+      if (lower.includes("questions") && lower.includes("["))
+        return "quiz";
+      if (lower.includes("results") && lower.includes("["))
+        return "assessment";
+    }
+    return null;
+  }
+  renderComponentByType(type, jsonData, container) {
+    try {
+      this.renderWithParsedData(type, JSON.parse(jsonData), container);
+    } catch (e) {
+      console.warn(`JSON.parse failed for ${type}, attempting regex extraction fallback...`);
+      if (type === "flashcards") {
+        const items = this.tryExtractFlashcards(jsonData);
+        if (items.length > 0)
+          this.renderFlashcards({ items }, container);
+        else
+          container.createEl("pre", { text: jsonData });
+      } else if (type === "quiz") {
+        const questions = this.tryExtractQuiz(jsonData);
+        if (questions.length > 0)
+          this.renderQuiz({ questions }, container);
+        else
+          container.createEl("pre", { text: jsonData });
+      } else if (type === "assessment") {
+        const results = this.tryExtractAssessment(jsonData);
+        if (results.length > 0)
+          this.renderAssessment({ results }, container);
+        else
+          container.createEl("pre", { text: jsonData });
+      }
+    }
+  }
+  renderWithParsedData(type, data, container) {
+    if (type === "flashcards")
+      this.renderFlashcards(data, container);
+    else if (type === "quiz")
+      this.renderQuiz(data, container);
+    else if (type === "assessment")
+      this.renderAssessment(data, container);
+  }
+  tryExtractFlashcards(str) {
+    const items = [];
+    const itemRegex = /\{[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?definition["'\s:]+([^"'\n]*)["']?(?:[\s\S]*?example["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
+    let match;
+    while ((match = itemRegex.exec(str)) !== null) {
+      if (match[1].trim() || match[2].trim()) {
+        items.push({
+          word: match[1].replace(/^[":\s]+/, "").trim(),
+          definition: match[2].replace(/^[":\s]+/, "").trim(),
+          example: (match[3] || "").replace(/^[":\s]+/, "").trim()
+        });
+      }
+    }
+    return items;
+  }
+  tryExtractQuiz(str) {
+    const questions = [];
+    const questionRegex = /\{[\s\S]*?sentence["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?\}/gi;
+    let match;
+    while ((match = questionRegex.exec(str)) !== null) {
+      questions.push({
+        sentence: match[1].replace(/^[":\s]+/, "").trim(),
+        answer: match[2].replace(/^[":\s]+/, "").trim(),
+        word: match[3].replace(/^[":\s]+/, "").trim()
+      });
+    }
+    return questions;
+  }
+  tryExtractAssessment(str) {
+    const results = [];
+    const resultRegex = /\{[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?score["'\s:]+(\d+)[\s\S]*?\}/gi;
+    let match;
+    while ((match = resultRegex.exec(str)) !== null) {
+      results.push({
+        word: match[1].replace(/^[":\s]+/, "").trim(),
+        score: parseInt(match[2])
+      });
+    }
+    return results;
+  }
+  cleanJson(str) {
+    return str.replace(/,\s*([}\]])/g, "$1").replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":');
+  }
+  renderFlashcards(data, container) {
+    const flashcardWrapper = container.createDiv({ cls: "flashcard-container" });
+    data.items.forEach((item) => {
+      const card = flashcardWrapper.createDiv({ cls: "flashcard" });
+      const front = card.createDiv({ cls: "flashcard-front", text: item.word });
+      const back = card.createDiv({ cls: "flashcard-back" });
+      back.createEl("div", { cls: "flashcard-definition", text: item.definition });
+      if (item.example) {
+        back.createEl("div", { cls: "flashcard-example", text: `Ex: ${item.example}` });
+      }
+      card.addEventListener("click", () => {
+        card.toggleClass("flipped", !card.hasClass("flipped"));
+      });
+    });
+  }
+  renderQuiz(data, container) {
+    const quizWrapper = container.createDiv({ cls: "quiz-container" });
+    const answers = {};
+    data.questions.forEach((q, idx) => {
+      const questionDiv = quizWrapper.createDiv({ cls: "quiz-question" });
+      const parts = q.sentence.split(/\[blank\]|_{3,}/g);
+      const sentenceEl = questionDiv.createEl("div", { cls: "quiz-sentence" });
+      parts.forEach((part, pIdx) => {
+        sentenceEl.createSpan({ text: part });
+        if (pIdx < parts.length - 1) {
+          const input = sentenceEl.createEl("input", { type: "text", cls: "quiz-input", placeholder: "..." });
+          input.addEventListener("change", () => {
+            answers[idx] = input.value.trim();
+          });
+          input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+          });
+          input.addEventListener("click", (e) => {
+            e.stopPropagation();
+            input.focus();
+          });
+        }
+      });
+      if (q.choices && q.choices.length > 0) {
+        const choiceWrapper = questionDiv.createDiv({ cls: "quiz-choices" });
+        q.choices.forEach((choice) => {
+          const btn = choiceWrapper.createEl("button", { text: choice, cls: "quiz-choice-btn" });
+          btn.addEventListener("click", () => {
+            const input = questionDiv.querySelector(".quiz-input");
+            if (input) {
+              input.value = choice;
+              answers[idx] = choice;
+            }
+            choiceWrapper.querySelectorAll(".quiz-choice-btn").forEach((b) => b.removeClass("selected"));
+            btn.addClass("selected");
+          });
+        });
+      }
+    });
+    const submitBtn = quizWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
+    submitBtn.addEventListener("click", async () => {
+      let userResponse = "Here are my answers for the quiz:\n";
+      data.questions.forEach((q, idx) => {
+        const userAnswer = (answers[idx] || "").trim();
+        const isCorrect = userAnswer.toLowerCase() === q.answer.toLowerCase();
+        const inputs = quizWrapper.querySelectorAll(`.quiz-question`)[idx].querySelectorAll(".quiz-input");
+        inputs.forEach((input) => {
+          input.removeClass("correct");
+          input.removeClass("wrong");
+          input.addClass(isCorrect ? "correct" : "wrong");
+        });
+        userResponse += `- Question ${idx + 1}: Word: ${q.word}, My Answer: ${userAnswer} (${isCorrect ? "Correct" : "Wrong"})
+`;
+      });
+      this.inputEl.value = userResponse + "\nPlease assess my performance.";
+      this.sendMessage();
+    });
+  }
+  renderAssessment(data, container) {
+    const assessmentDiv = container.createDiv({ cls: "assessment-result" });
+    assessmentDiv.createEl("h4", { text: "Practice Session Complete!" });
+    data.results.forEach((res) => {
+      const itemDiv = assessmentDiv.createDiv({ cls: "assessment-item" });
+      itemDiv.createSpan({ text: res.word, cls: "assessment-word" });
+      itemDiv.createSpan({ text: ` Score: ${res.score}/5`, cls: `assessment-score q${res.score}` });
+      this.plugin.updateSRSProgress(res.word, res.score);
+    });
   }
   renderUserMessage(content) {
     const bubble = this.createMessageBubble("user");
@@ -347,8 +797,9 @@ Error: ${e.toString()}`;
     return bubble;
   }
   async clearHistory() {
+    var _a;
     this.messages = [];
-    this.messages.push({ role: "system", content: this.plugin.settings.systemPrompt });
+    this.messages.push({ role: "system", content: ((_a = this.plugin.settings.customPrompts[0]) == null ? void 0 : _a.prompt) || "" });
     this.chatContainer.empty();
   }
   async setMessages(messages) {
@@ -362,14 +813,14 @@ Error: ${e.toString()}`;
     }
     this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
   }
-  async startImprovement(sentence) {
+  async startImprovement(sentence, promptContent) {
+    var _a;
     this.messages = [];
-    this.messages.push({ role: "system", content: this.plugin.settings.systemPrompt });
-    this.messages.push({ role: "user", content: `Please improve this sentence:
-
-"${sentence}"` });
+    const systemPrompt = promptContent || ((_a = this.plugin.settings.customPrompts[0]) == null ? void 0 : _a.prompt) || "";
+    this.messages.push({ role: "system", content: systemPrompt });
+    this.messages.push({ role: "user", content: sentence });
     this.chatContainer.empty();
-    this.renderUserMessage(`Improve this: "${sentence}"`);
+    this.renderUserMessage(sentence);
     await this.generateAssistantResponse();
   }
 };
@@ -381,26 +832,16 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
     await this.loadSettings();
     this.registerView(
       IMPROVE_SENTENCE_VIEW_TYPE,
-      (leaf) => new ImproveSentenceView(leaf, this)
+      (leaf) => {
+        const view = new ImproveSentenceView(leaf);
+        view.plugin = this;
+        return view;
+      }
     );
     this.addRibbonIcon("message-square", "Open Improve Sentence Chat", () => {
       this.activateView();
     });
-    this.addCommand({
-      id: "improve-selected-sentence",
-      name: "Improve Selected Sentence",
-      editorCallback: (editor, view) => {
-        const selection = editor.getSelection();
-        if (selection.trim() === "") {
-          return;
-        }
-        this.activateView().then((v) => {
-          if (v) {
-            v.startImprovement(selection);
-          }
-        });
-      }
-    });
+    this.registerCustomCommands();
     this.addCommand({
       id: "open-improve-sentence-sidebar",
       name: "Open Sidebar Chat",
@@ -408,7 +849,146 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
         this.activateView();
       }
     });
+    this.addCommand({
+      id: "save-selected-vocabulary",
+      name: "Save Selected to Vocabulary",
+      editorCallback: (editor) => {
+        const selection = editor.getSelection().trim();
+        if (selection) {
+          this.saveVocabulary(selection);
+        }
+      }
+    });
+    this.addCommand({
+      id: "test-recent-vocabulary",
+      name: "AI Test Recent Vocabulary",
+      callback: () => {
+        this.testRecentVocabulary();
+      }
+    });
+    this.registerEvent(
+      this.app.workspace.on("editor-menu", (menu, editor, view) => {
+        const selection = editor.getSelection().trim();
+        if (selection) {
+          menu.addItem((item) => {
+            item.setTitle("Save to Vocabulary").setIcon("book-marked").onClick(async () => {
+              this.saveVocabulary(selection);
+            });
+          });
+        }
+      })
+    );
     this.addSettingTab(new ImproveYourSentenceSettingTab(this.app, this));
+  }
+  async saveVocabulary(word, context) {
+    const existing = this.settings.vocabulary.find((v) => v.word.toLowerCase() === word.toLowerCase());
+    if (existing) {
+      console.log("Word already in vocabulary");
+      return;
+    }
+    const newItem = {
+      word,
+      context,
+      dateAdded: Date.now(),
+      nextReview: Date.now() + 24 * 60 * 60 * 1e3,
+      // Review in 1 day
+      interval: 1,
+      repetition: 1,
+      efactor: 2.5
+    };
+    this.settings.vocabulary.push(newItem);
+    await this.saveSettings();
+    new import_obsidian3.Notice(`Saved "${word}" to vocabulary.`);
+  }
+  async testRecentVocabulary() {
+    const now = Date.now();
+    const words = this.settings.vocabulary.sort((a, b) => a.nextReview - b.nextReview).slice(0, 10);
+    if (words.length === 0) {
+      new import_obsidian3.Notice("No vocabulary words saved yet.");
+      return;
+    }
+    const wordList = words.map((v) => v.word).join(", ");
+    const prompt = `You are a Vocabulary Mentor helping me master these 10 words: ${wordList}.
+Always guide me through these steps sequentially. Start with Step 1: Flashcards.
+
+IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code blocks as shown below. Do not include extra text or ignore the block format.
+
+1. **Flashcards**: Provide definitions and example sentences for each word.
+   \`\`\`json:flashcards
+   {
+     "items": [
+       { "word": "word1", "definition": "...", "example": "..." },
+       ...
+     ]
+   }
+   \`\`\`
+2. **Fill in the Blank**: After I review the flashcards, create 10 fill-in-the-blank sentences (one for each word).
+   \`\`\`json:quiz
+   {
+     "questions": [
+       { "sentence": "He was very [blank] when he heard the news.", "answer": "happy", "word": "happy" },
+       ...
+     ]
+   }
+   \`\`\`
+3. **Assessment**: After I complete the quiz, score my performance and provide feedback. Tell the plugin my score for each word (use 5 for Correct, 1 for Wrong) using:
+   \`\`\`json:assessment
+   {
+     "results": [
+       { "word": "word1", "score": 5 },
+       ...
+     ]
+   }
+   \`\`\`
+
+ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI.`;
+    const view = await this.activateView();
+    if (view) {
+      view.startImprovement("Vocabulary Practice Session", prompt);
+    }
+  }
+  async updateSRSProgress(word, quality) {
+    const item = this.settings.vocabulary.find((v) => v.word.toLowerCase() === word.toLowerCase());
+    if (!item)
+      return;
+    if (quality >= 3) {
+      if (item.repetition === 0) {
+        item.interval = 1;
+      } else if (item.repetition === 1) {
+        item.interval = 6;
+      } else {
+        item.interval = Math.round(item.interval * item.efactor);
+      }
+      item.repetition++;
+    } else {
+      item.repetition = 0;
+      item.interval = 1;
+    }
+    item.efactor = item.efactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+    if (item.efactor < 1.3)
+      item.efactor = 1.3;
+    item.nextReview = Date.now() + item.interval * 24 * 60 * 60 * 1e3;
+    await this.saveSettings();
+    console.log(`Updated SRS for ${word}: Interval=${item.interval}, Repetition=${item.repetition}, E-Factor=${item.efactor.toFixed(2)}, Next Review=${new Date(item.nextReview).toLocaleDateString()}`);
+  }
+  registerCustomCommands() {
+    this.settings.customPrompts.forEach((prompt) => {
+      this.addCommand({
+        id: `prompt-${prompt.id}`,
+        name: `Prompt: ${prompt.name}`,
+        editorCallback: (editor) => {
+          const selection = editor.getSelection();
+          if (selection.trim() === "") {
+            return;
+          }
+          this.activateView().then((v) => {
+            if (v) {
+              v.startImprovement(selection, prompt.prompt);
+            }
+          });
+        }
+      });
+    });
   }
   async activateView() {
     const { workspace } = this.app;

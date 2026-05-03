@@ -1,5 +1,21 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, PluginSettingTab, Setting, Notice, setIcon } from 'obsidian';
 import ImproveYourSentencePlugin from './main';
+
+export interface CustomPrompt {
+	id: string;
+	name: string;
+	prompt: string;
+}
+
+export interface VocabularyItem {
+	word: string;
+	context?: string;
+	dateAdded: number;
+	nextReview: number;
+	interval: number;
+	repetition: number;
+	efactor: number;
+}
 
 export interface ImproveYourSentenceSettings {
 	provider: string; // 'openai', 'gemini', 'openrouter'
@@ -9,7 +25,8 @@ export interface ImproveYourSentenceSettings {
 	openAiModel: string;
 	geminiModel: string;
 	openRouterModel: string;
-	systemPrompt: string;
+	customPrompts: CustomPrompt[];
+	vocabulary: VocabularyItem[];
 }
 
 export const DEFAULT_SETTINGS: ImproveYourSentenceSettings = {
@@ -20,11 +37,28 @@ export const DEFAULT_SETTINGS: ImproveYourSentenceSettings = {
 	openAiModel: 'gpt-4o',
 	geminiModel: 'gemini-1.5-flash',
 	openRouterModel: 'openai/gpt-4o',
-	systemPrompt: `Analyze the following sentence.
+	customPrompts: [
+		{
+			id: 'improve-sentence',
+			name: 'Improve Sentence',
+			prompt: `Analyze the following sentence.
 Provide the syntactically correct and natural version of the sentence.
 Then, provide 3 alternative versions (e.g., more professional, creative, or concise).
 Format your response using Markdown, starting with "## Corrected Version:", followed by "## Alternatives:", and present the alternatives as a numbered list.
 Output nothing else.`
+		},
+		{
+			id: 'check-grammar',
+			name: 'Check Grammar',
+			prompt: 'Check the grammar and spelling of the following text. Provide the corrected version and a brief explanation of the changes.'
+		},
+		{
+			id: 'translate-to-vn',
+			name: 'Translate to Vietnamese',
+			prompt: 'Translate the following text to Vietnamese.'
+		}
+	],
+	vocabulary: []
 }
 
 export class ImproveYourSentenceSettingTab extends PluginSettingTab {
@@ -34,6 +68,9 @@ export class ImproveYourSentenceSettingTab extends PluginSettingTab {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
+
+	vocabPage = 0;
+	vocabPageSize = 10;
 
 	display(): void {
 		const { containerEl } = this;
@@ -128,16 +165,114 @@ export class ImproveYourSentenceSettingTab extends PluginSettingTab {
 				);
 		}
 
-		new Setting(containerEl)
-			.setName('System Prompt')
-			.setDesc('Customize how the AI should respond to the sentence selection.')
-			.addTextArea(text => text
-				.setPlaceholder('Enter system prompt...')
-				.setValue(this.plugin.settings.systemPrompt)
+		containerEl.createEl('h3', { text: 'Custom Prompts' });
+
+		this.plugin.settings.customPrompts.forEach((prompt, index) => {
+			const s = new Setting(containerEl)
+				.setName(`Prompt ${index + 1}: ${prompt.name}`)
+				.setDesc('Description: ' + (prompt.prompt.length > 50 ? prompt.prompt.substring(0, 50) + '...' : prompt.prompt));
+			
+			s.addText(text => text
+				.setPlaceholder('Prompt Name')
+				.setValue(prompt.name)
 				.onChange(async (value) => {
-					this.plugin.settings.systemPrompt = value;
+					prompt.name = value;
 					await this.plugin.saveSettings();
 				})
 			);
+
+			s.addExtraButton(cb => {
+				cb.setIcon('trash')
+					.setTooltip('Delete Prompt')
+					.onClick(async () => {
+						this.plugin.settings.customPrompts.splice(index, 1);
+						await this.plugin.saveSettings();
+						this.display();
+					});
+			});
+
+			new Setting(containerEl)
+				.setName('Prompt Content')
+				.setDesc('The actual prompt sent to the AI.')
+				.addTextArea(text => text
+					.setPlaceholder('Enter system prompt...')
+					.setValue(prompt.prompt)
+					.onChange(async (value) => {
+						prompt.prompt = value;
+						await this.plugin.saveSettings();
+					})
+				);
+		});
+
+		new Setting(containerEl)
+			.addButton(btn => btn
+				.setButtonText('Add New Prompt')
+				.setCta()
+				.onClick(async () => {
+					this.plugin.settings.customPrompts.push({
+						id: 'custom-prompt-' + Date.now(),
+						name: 'New Prompt',
+						prompt: ''
+					});
+					await this.plugin.saveSettings();
+					this.display();
+				})
+			);
+
+		containerEl.createEl('h3', { text: 'Vocabulary Management' });
+		
+		if (this.plugin.settings.vocabulary.length === 0) {
+			containerEl.createEl('p', { text: 'No vocabulary words saved yet.', cls: 'setting-item-description' });
+		} else {
+			const tableWrapper = containerEl.createDiv({ cls: 'vocab-table-wrapper' });
+			const table = tableWrapper.createEl('table', { cls: 'vocab-table' });
+			const header = table.createEl('thead').createEl('tr');
+			header.createEl('th', { text: 'Word' });
+			header.createEl('th', { text: 'Added' });
+			header.createEl('th', { text: 'Next Review' });
+			header.createEl('th', { text: 'Actions' });
+
+			const tbody = table.createEl('tbody');
+			
+			const sortedVocab = [...this.plugin.settings.vocabulary].sort((a, b) => a.nextReview - b.nextReview);
+			const start = this.vocabPage * this.vocabPageSize;
+			const end = start + this.vocabPageSize;
+			const pagedVocab = sortedVocab.slice(start, end);
+
+			pagedVocab.forEach((item) => {
+				const row = tbody.createEl('tr');
+				row.createEl('td', { text: item.word });
+				row.createEl('td', { text: new Date(item.dateAdded).toLocaleDateString() });
+				row.createEl('td', { text: new Date(item.nextReview).toLocaleDateString() });
+				
+				const actionsCell = row.createEl('td');
+				const deleteBtn = actionsCell.createEl('button', { cls: 'vocab-delete-btn' });
+				setIcon(deleteBtn, 'trash');
+				deleteBtn.addEventListener('click', async () => {
+					this.plugin.settings.vocabulary = this.plugin.settings.vocabulary.filter(v => v !== item);
+					await this.plugin.saveSettings();
+					this.display();
+				});
+			});
+
+			const pagination = containerEl.createDiv({ cls: 'vocab-pagination' });
+			const totalPages = Math.ceil(sortedVocab.length / this.vocabPageSize);
+			
+			const prevBtn = pagination.createEl('button', { text: 'Previous', cls: 'vocab-page-btn' });
+			if (this.vocabPage === 0) prevBtn.disabled = true;
+			prevBtn.addEventListener('click', () => {
+				this.vocabPage--;
+				this.display();
+			});
+
+			pagination.createSpan({ text: ` Page ${this.vocabPage + 1} of ${totalPages} `, cls: 'vocab-page-info' });
+
+			const nextBtn = pagination.createEl('button', { text: 'Next', cls: 'vocab-page-btn' });
+			if (this.vocabPage >= totalPages - 1) nextBtn.disabled = true;
+			nextBtn.addEventListener('click', () => {
+				this.vocabPage++;
+				this.display();
+			});
+		}
 	}
 }

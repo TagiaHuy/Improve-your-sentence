@@ -68,6 +68,7 @@
     padding: 10px 14px;
     border-radius: 8px;
     line-height: 1.4;
+    user-select: text; /* Allow text selection */
 }
 
 .chat-message.user .bubble {
@@ -114,4 +115,277 @@
 .chat-send-btn {
     padding: 8px 16px;
     height: 100%;
+}
+
+/* Slash Command Suggestions */
+.slash-suggestions {
+    background-color: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    position: absolute;
+    bottom: calc(100% + 5px);
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.slash-suggestion-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--background-modifier-border-soft);
+}
+
+.slash-suggestion-item:last-child {
+    border-bottom: none;
+}
+
+.slash-suggestion-item.selected, .slash-suggestion-item:hover {
+    background-color: var(--background-secondary);
+    color: var(--interactive-accent);
+}
+
+.slash-suggestion-name {
+    font-weight: bold;
+    display: block;
+}
+
+.slash-suggestion-preview {
+    font-size: 0.85em;
+    color: var(--text-muted);
+}
+
+.chat-input-container {
+    position: relative;
+}
+
+/* Interactive Learning System Styles */
+.flashcard-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+    margin: 10px 0;
+}
+
+.flashcard {
+    height: 100px;
+    perspective: 1000px;
+    cursor: pointer;
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.6s;
+}
+
+.flashcard.flipped {
+    transform: rotateY(180deg);
+}
+
+.flashcard-front, .flashcard-back {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start; /* Better for scrolling content */
+    padding: 15px; /* Increase padding */
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid var(--background-modifier-border);
+    overflow: auto;
+    word-break: break-word;
+}
+
+/* Ensure content is centered if it doesn't overflow */
+.flashcard-front {
+    justify-content: center;
+}
+
+.flashcard-front {
+    background-color: var(--background-secondary);
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.flashcard-back {
+    background-color: var(--background-primary);
+    transform: rotateY(180deg);
+}
+
+.flashcard-definition {
+    font-size: 0.85em;
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.flashcard-example {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.quiz-container {
+    background-color: var(--background-secondary-alt);
+    padding: 15px;
+    border-radius: 8px;
+    margin: 10px 0;
+}
+
+.quiz-question {
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--background-modifier-border-soft);
+}
+
+.quiz-question:last-child {
+    border-bottom: none;
+}
+
+.quiz-sentence {
+    line-height: 1.6;
+    margin-bottom: 8px;
+}
+
+.quiz-input {
+    background-color: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    margin: 0 5px;
+    width: auto;
+    min-width: 60px;
+    max-width: 150px;
+    font-weight: bold;
+    color: var(--interactive-accent);
+    display: inline-block;
+}
+
+.quiz-input.correct {
+    border-color: #2e7d32 !important;
+    background-color: rgba(46, 125, 50, 0.1) !important;
+}
+
+.quiz-input.wrong {
+    border-color: #f44336 !important;
+    background-color: rgba(244, 67, 54, 0.1) !important;
+}
+
+.quiz-choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+.quiz-choice-btn {
+    font-size: 0.85em;
+    padding: 4px 10px;
+}
+
+.quiz-choice-btn.selected {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+}
+
+.quiz-submit-btn {
+    width: 100%;
+    margin-top: 10px;
+}
+
+.assessment-result {
+    background-color: var(--background-secondary);
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid var(--interactive-accent);
+}
+
+.assessment-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    padding: 5px 0;
+}
+
+.assessment-word {
+    font-weight: bold;
+}
+
+.assessment-score {
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.assessment-score.q5 { background-color: #2e7d32; color: white; }
+.assessment-score.q4 { background-color: #4caf50; color: white; }
+.assessment-score.q3 { background-color: #8bc34a; color: white; }
+.assessment-score.q2 { background-color: #ff9800; color: white; }
+.assessment-score.q1 { background-color: #f44336; color: white; }
+.assessment-score.q0 { background-color: #b71c1c; color: white; }
+
+/* Vocabulary Management Styles */
+.vocab-table-wrapper {
+    margin-top: 10px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.vocab-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.vocab-table th, .vocab-table td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.vocab-table th {
+    background-color: var(--background-secondary);
+    font-weight: bold;
+    color: var(--text-muted);
+}
+
+.vocab-table tr:last-child td {
+    border-bottom: none;
+}
+
+.vocab-delete-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s;
+}
+
+.vocab-delete-btn:hover {
+    color: var(--text-error);
+}
+
+.vocab-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    margin-top: 15px;
+    padding: 10px;
+}
+
+.vocab-page-btn {
+    padding: 4px 12px;
+}
+
+.vocab-page-info {
+    font-size: 0.9em;
+    color: var(--text-muted);
 }
