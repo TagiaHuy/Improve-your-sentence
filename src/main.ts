@@ -120,26 +120,21 @@ IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code 
      ]
    }
    \`\`\`
-2. **Fill in the Blank**: After I review the flashcards, create 10 fill-in-the-blank sentences (one for each word).
-   \`\`\`json:quiz
-   {
-     "questions": [
-       { "sentence": "He was very [blank] when he heard the news.", "answer": "happy", "word": "happy" },
-       ...
-     ]
-   }
-   \`\`\`
-3. **Assessment**: After I complete the quiz, score my performance and provide feedback. Tell the plugin my score for each word (use 5 for Correct, 1 for Wrong) using:
-   \`\`\`json:assessment
-   {
-     "results": [
-       { "word": "word1", "score": 5 },
-       ...
-     ]
-   }
-   \`\`\`
+2. **Exercise**: Create interactive exercises for each word. You can choose from:
+   - **Fill in the Blank**:
+     \`\`\`json:quiz
+     { "questions": [{ "sentence": "He was [blank].", "answer": "happy", "word": "happy" }] }
+     \`\`\`
+   - **Multiple Choice**:
+     \`\`\`json:choice
+     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
+     \`\`\`
+   - **Sentence Scramble**:
+     \`\`\`json:scramble
+     { "tasks": [{ "scrambled": "is He happy today", "original": "He is happy today", "word": "happy" }] }
+     \`\`\`
 
-ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI.`;
+ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI. After providing the exercises, wait for me to check my answers. When I send you my answers, provide the correct answers and a brief explanation for each one to help me learn from my mistakes. (Note: The plugin handles the SRS progress automatically, so you don't need to provide scores).`;
 
 		const view = await this.activateView();
 		if (view) {

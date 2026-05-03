@@ -242,9 +242,13 @@ export class ImproveSentenceView extends ItemView {
         }
     }
 
+    normalizeAnswer(str: string): string {
+        return str.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").replace(/\s{2,}/g, " ").trim();
+    }
+
     async parseAndRenderInteractiveComponents(content: string, container: HTMLElement) {
         // 1. Try to find tagged JSON blocks first: ```json:type ... ```
-        const taggedRegex = /```json:(flashcards|quiz|assessment)\s*([\s\S]*?)\s*```/g;
+        const taggedRegex = /```json:(flashcards|quiz|assessment|choice|scramble)\s*([\s\S]*?)\s*```/g;
         // 2. Try to find untagged JSON blocks: ```json ... ```
         const untaggedRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
         
@@ -320,14 +324,20 @@ export class ImproveSentenceView extends ItemView {
         try {
             const data = JSON.parse(jsonStr);
             if (data.items && Array.isArray(data.items)) return 'flashcards';
-            if (data.questions && Array.isArray(data.questions)) return 'quiz';
+            if (data.questions && Array.isArray(data.questions)) {
+                if (data.questions.length > 0 && data.questions[0].options) return 'choice';
+                return 'quiz';
+            }
             if (data.results && Array.isArray(data.results)) return 'assessment';
+            if (data.tasks && Array.isArray(data.tasks)) return 'scramble';
         } catch (e) {
             // Might be partial JSON, try simple string check
             const lower = jsonStr.toLowerCase();
             if (lower.includes('items') && lower.includes('[')) return 'flashcards';
+            if (lower.includes('options') && lower.includes('questions')) return 'choice';
             if (lower.includes('questions') && lower.includes('[')) return 'quiz';
             if (lower.includes('results') && lower.includes('[')) return 'assessment';
+            if (lower.includes('tasks') && lower.includes('scrambled')) return 'scramble';
         }
         return null;
     }
@@ -351,6 +361,14 @@ export class ImproveSentenceView extends ItemView {
                 const results = this.tryExtractAssessment(jsonData);
                 if (results.length > 0) this.renderAssessment({ results }, container);
                 else container.createEl('pre', { text: jsonData });
+            } else if (type === 'choice') {
+                const questions = this.tryExtractChoice(jsonData);
+                if (questions.length > 0) this.renderChoice({ questions }, container);
+                else container.createEl('pre', { text: jsonData });
+            } else if (type === 'scramble') {
+                const tasks = this.tryExtractScramble(jsonData);
+                if (tasks.length > 0) this.renderScramble({ tasks }, container);
+                else container.createEl('pre', { text: jsonData });
             }
         }
     }
@@ -359,6 +377,153 @@ export class ImproveSentenceView extends ItemView {
         if (type === 'flashcards') this.renderFlashcards(data, container);
         else if (type === 'quiz') this.renderQuiz(data, container);
         else if (type === 'assessment') this.renderAssessment(data, container);
+        else if (type === 'choice') this.renderChoice(data, container);
+        else if (type === 'scramble') this.renderScramble(data, container);
+    }
+
+    renderChoice(data: any, container: HTMLElement) {
+        const choiceWrapper = container.createDiv({ cls: 'choice-container' });
+        const answers: Record<number, string> = {};
+
+        data.questions.forEach((q: any, idx: number) => {
+            const questionDiv = choiceWrapper.createDiv({ cls: 'choice-question' });
+            questionDiv.createEl('div', { cls: 'choice-definition', text: q.definition });
+            
+            const optionsWrapper = questionDiv.createDiv({ cls: 'choice-options' });
+            q.options.forEach((opt: string) => {
+                const optBtn = optionsWrapper.createEl('button', { text: opt, cls: 'choice-opt-btn' });
+                optBtn.addEventListener('click', () => {
+                    answers[idx] = opt;
+                    optionsWrapper.querySelectorAll('.choice-opt-btn').forEach(b => b.removeClass('selected'));
+                    optBtn.addClass('selected');
+                });
+            });
+        });
+
+        const submitBtn = choiceWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
+        submitBtn.addEventListener('click', () => {
+            let userResponse = "Here are my answers for the Multiple Choice quiz:\n";
+            data.questions.forEach((q: any, idx: number) => {
+                const userAnswer = answers[idx] || "(no answer selected)";
+                const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
+                
+                const questionDiv = choiceWrapper.querySelectorAll('.choice-question')[idx];
+                const btns = questionDiv.querySelectorAll('.choice-opt-btn');
+                btns.forEach(btn => {
+                    const b = btn as HTMLButtonElement;
+                    if (this.normalizeAnswer(b.innerText) === this.normalizeAnswer(q.answer)) b.addClass('correct');
+                    else if (b.hasClass('selected')) b.addClass('wrong');
+                });
+
+                // Automatic SRS Update
+                this.plugin.updateSRSProgress(q.answer, isCorrect ? 5 : 1);
+                
+                userResponse += `- Problem ${idx + 1} (Definition: ${q.definition.substring(0, 40)}...): I chose "${userAnswer}". (${isCorrect ? 'Correct' : 'Incorrect, the right word was ' + q.answer})\n`;
+            });
+            submitBtn.disabled = true;
+            submitBtn.setText('Checked!');
+            
+            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
+            this.sendMessage();
+        });
+    }
+
+    renderScramble(data: any, container: HTMLElement) {
+        const scrambleWrapper = container.createDiv({ cls: 'scramble-container' });
+        const answers: Record<number, string[]> = {};
+
+        data.tasks.forEach((task: any, idx: number) => {
+            const taskDiv = scrambleWrapper.createDiv({ cls: 'scramble-task' });
+            const words = (typeof task.scrambled === 'string' ? task.scrambled.split(' ') : task.scrambled);
+            const currentOrder = [...words].sort(() => Math.random() - 0.5);
+            const userOrder: string[] = [];
+            answers[idx] = userOrder;
+
+            const poolDiv = taskDiv.createDiv({ cls: 'scramble-pool' });
+            const resultDiv = taskDiv.createDiv({ cls: 'scramble-result' });
+
+            const renderPool = () => {
+                poolDiv.empty();
+                currentOrder.forEach((word) => {
+                    const chip = poolDiv.createSpan({ text: word, cls: 'scramble-chip' });
+                    chip.addEventListener('click', () => {
+                        userOrder.push(word);
+                        currentOrder.splice(currentOrder.indexOf(word), 1);
+                        renderPool();
+                        renderResult();
+                    });
+                });
+            };
+
+            const renderResult = () => {
+                resultDiv.empty();
+                userOrder.forEach((word) => {
+                    const chip = resultDiv.createSpan({ text: word, cls: 'scramble-chip selected' });
+                    chip.addEventListener('click', () => {
+                        currentOrder.push(word);
+                        userOrder.splice(userOrder.indexOf(word), 1);
+                        renderPool();
+                        renderResult();
+                    });
+                });
+            };
+
+            renderPool();
+            renderResult();
+        });
+
+        const submitBtn = scrambleWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
+        submitBtn.addEventListener('click', () => {
+            let userResponse = "Here are my answers for the Sentence Scramble:\n";
+            data.tasks.forEach((task: any, idx: number) => {
+                const userAnswer = (answers[idx] || []).join(' ');
+                const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(task.original);
+                
+                const taskDiv = scrambleWrapper.querySelectorAll('.scramble-task')[idx];
+                taskDiv.removeClass('correct');
+                taskDiv.removeClass('wrong');
+                taskDiv.addClass(isCorrect ? 'correct' : 'wrong');
+
+                // Automatic SRS Update
+                this.plugin.updateSRSProgress(task.word, isCorrect ? 5 : 1);
+                
+                userResponse += `- Task ${idx + 1} (${task.word}): I ordered it as "${userAnswer}". (${isCorrect ? 'Correct' : 'Incorrect, it should be ' + task.original})\n`;
+            });
+            submitBtn.disabled = true;
+            submitBtn.setText('Checked!');
+            
+            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these constructions.";
+            this.sendMessage();
+        });
+    }
+
+    tryExtractChoice(str: string): any[] {
+        const questions: any[] = [];
+        const qRegex = /\{[\s\S]*?definition["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?options["'\s:]+\[([^\]]*)\][\s\S]*?\}/gi;
+        let match;
+        while ((match = qRegex.exec(str)) !== null) {
+            const options = match[3].split(',').map(o => o.replace(/^[":\s]+|[":\s]+$/g, '').trim());
+            questions.push({
+                definition: match[1].replace(/^[":\s]+/, '').trim(),
+                answer: match[2].replace(/^[":\s]+/, '').trim(),
+                options: options
+            });
+        }
+        return questions;
+    }
+
+    tryExtractScramble(str: string): any[] {
+        const tasks: any[] = [];
+        const tRegex = /\{[\s\S]*?scrambled["'\s:]+([^"'\n\r\[]*)[\s\S]*?original["'\s:]+([^"'\n]*)["']?[\s\S]*?(?:word["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
+        let match;
+        while ((match = tRegex.exec(str)) !== null) {
+            tasks.push({
+                scrambled: match[1].replace(/^[":\s]+/, '').trim(),
+                original: match[2].replace(/^[":\s]+/, '').trim(),
+                word: (match[3] || "").replace(/^[":\s]+/, '').trim()
+            });
+        }
+        return tasks;
     }
 
     tryExtractFlashcards(str: string): any[] {
@@ -478,23 +643,30 @@ export class ImproveSentenceView extends ItemView {
 
         const submitBtn = quizWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
         submitBtn.addEventListener('click', async () => {
-            let userResponse = "Here are my answers for the quiz:\n";
+            let userResponse = "Here are my answers for the quiz (I've already highlighted them in the UI):\n";
             data.questions.forEach((q: any, idx: number) => {
                 const userAnswer = (answers[idx] || "").trim();
-                const isCorrect = userAnswer.toLowerCase() === q.answer.toLowerCase();
+                const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
                 
                 // Visual feedback
-                const inputs = quizWrapper.querySelectorAll(`.quiz-question`)[idx].querySelectorAll('.quiz-input');
+                const questionEl = quizWrapper.querySelectorAll(`.quiz-question`)[idx];
+                const inputs = questionEl.querySelectorAll('.quiz-input');
                 inputs.forEach(input => {
                     input.removeClass('correct');
                     input.removeClass('wrong');
                     input.addClass(isCorrect ? 'correct' : 'wrong');
                 });
 
-                userResponse += `- Question ${idx + 1}: Word: ${q.word}, My Answer: ${userAnswer} (${isCorrect ? 'Correct' : 'Wrong'})\n`;
+                // Automatic SRS Update
+                this.plugin.updateSRSProgress(q.word, isCorrect ? 5 : 1);
+                
+                userResponse += `- Question ${idx + 1} (${q.word}): My answer was "${userAnswer}". (${isCorrect ? 'Correct' : 'Incorrect, the right answer is ' + q.answer})\n`;
             });
             
-            this.inputEl.value = userResponse + "\nPlease assess my performance.";
+            submitBtn.disabled = true;
+            submitBtn.setText('Checked!');
+            
+            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
             this.sendMessage();
         });
     }

@@ -549,8 +549,11 @@ Error: ${e.toString()}`;
       this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
     }
   }
+  normalizeAnswer(str) {
+    return str.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").replace(/\s{2,}/g, " ").trim();
+  }
   async parseAndRenderInteractiveComponents(content, container) {
-    const taggedRegex = /```json:(flashcards|quiz|assessment)\s*([\s\S]*?)\s*```/g;
+    const taggedRegex = /```json:(flashcards|quiz|assessment|choice|scramble)\s*([\s\S]*?)\s*```/g;
     const untaggedRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
     let lastIndex = 0;
     let matchFound = false;
@@ -611,18 +614,27 @@ Error: ${e.toString()}`;
       const data = JSON.parse(jsonStr);
       if (data.items && Array.isArray(data.items))
         return "flashcards";
-      if (data.questions && Array.isArray(data.questions))
+      if (data.questions && Array.isArray(data.questions)) {
+        if (data.questions.length > 0 && data.questions[0].options)
+          return "choice";
         return "quiz";
+      }
       if (data.results && Array.isArray(data.results))
         return "assessment";
+      if (data.tasks && Array.isArray(data.tasks))
+        return "scramble";
     } catch (e) {
       const lower = jsonStr.toLowerCase();
       if (lower.includes("items") && lower.includes("["))
         return "flashcards";
+      if (lower.includes("options") && lower.includes("questions"))
+        return "choice";
       if (lower.includes("questions") && lower.includes("["))
         return "quiz";
       if (lower.includes("results") && lower.includes("["))
         return "assessment";
+      if (lower.includes("tasks") && lower.includes("scrambled"))
+        return "scramble";
     }
     return null;
   }
@@ -649,6 +661,18 @@ Error: ${e.toString()}`;
           this.renderAssessment({ results }, container);
         else
           container.createEl("pre", { text: jsonData });
+      } else if (type === "choice") {
+        const questions = this.tryExtractChoice(jsonData);
+        if (questions.length > 0)
+          this.renderChoice({ questions }, container);
+        else
+          container.createEl("pre", { text: jsonData });
+      } else if (type === "scramble") {
+        const tasks = this.tryExtractScramble(jsonData);
+        if (tasks.length > 0)
+          this.renderScramble({ tasks }, container);
+        else
+          container.createEl("pre", { text: jsonData });
       }
     }
   }
@@ -659,6 +683,136 @@ Error: ${e.toString()}`;
       this.renderQuiz(data, container);
     else if (type === "assessment")
       this.renderAssessment(data, container);
+    else if (type === "choice")
+      this.renderChoice(data, container);
+    else if (type === "scramble")
+      this.renderScramble(data, container);
+  }
+  renderChoice(data, container) {
+    const choiceWrapper = container.createDiv({ cls: "choice-container" });
+    const answers = {};
+    data.questions.forEach((q, idx) => {
+      const questionDiv = choiceWrapper.createDiv({ cls: "choice-question" });
+      questionDiv.createEl("div", { cls: "choice-definition", text: q.definition });
+      const optionsWrapper = questionDiv.createDiv({ cls: "choice-options" });
+      q.options.forEach((opt) => {
+        const optBtn = optionsWrapper.createEl("button", { text: opt, cls: "choice-opt-btn" });
+        optBtn.addEventListener("click", () => {
+          answers[idx] = opt;
+          optionsWrapper.querySelectorAll(".choice-opt-btn").forEach((b) => b.removeClass("selected"));
+          optBtn.addClass("selected");
+        });
+      });
+    });
+    const submitBtn = choiceWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
+    submitBtn.addEventListener("click", () => {
+      let userResponse = "Here are my answers for the Multiple Choice quiz:\n";
+      data.questions.forEach((q, idx) => {
+        const userAnswer = answers[idx] || "(no answer selected)";
+        const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
+        const questionDiv = choiceWrapper.querySelectorAll(".choice-question")[idx];
+        const btns = questionDiv.querySelectorAll(".choice-opt-btn");
+        btns.forEach((btn) => {
+          const b = btn;
+          if (this.normalizeAnswer(b.innerText) === this.normalizeAnswer(q.answer))
+            b.addClass("correct");
+          else if (b.hasClass("selected"))
+            b.addClass("wrong");
+        });
+        this.plugin.updateSRSProgress(q.answer, isCorrect ? 5 : 1);
+        userResponse += `- Problem ${idx + 1} (Definition: ${q.definition.substring(0, 40)}...): I chose "${userAnswer}". (${isCorrect ? "Correct" : "Incorrect, the right word was " + q.answer})
+`;
+      });
+      submitBtn.disabled = true;
+      submitBtn.setText("Checked!");
+      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
+      this.sendMessage();
+    });
+  }
+  renderScramble(data, container) {
+    const scrambleWrapper = container.createDiv({ cls: "scramble-container" });
+    const answers = {};
+    data.tasks.forEach((task, idx) => {
+      const taskDiv = scrambleWrapper.createDiv({ cls: "scramble-task" });
+      const words = typeof task.scrambled === "string" ? task.scrambled.split(" ") : task.scrambled;
+      const currentOrder = [...words].sort(() => Math.random() - 0.5);
+      const userOrder = [];
+      answers[idx] = userOrder;
+      const poolDiv = taskDiv.createDiv({ cls: "scramble-pool" });
+      const resultDiv = taskDiv.createDiv({ cls: "scramble-result" });
+      const renderPool = () => {
+        poolDiv.empty();
+        currentOrder.forEach((word) => {
+          const chip = poolDiv.createSpan({ text: word, cls: "scramble-chip" });
+          chip.addEventListener("click", () => {
+            userOrder.push(word);
+            currentOrder.splice(currentOrder.indexOf(word), 1);
+            renderPool();
+            renderResult();
+          });
+        });
+      };
+      const renderResult = () => {
+        resultDiv.empty();
+        userOrder.forEach((word) => {
+          const chip = resultDiv.createSpan({ text: word, cls: "scramble-chip selected" });
+          chip.addEventListener("click", () => {
+            currentOrder.push(word);
+            userOrder.splice(userOrder.indexOf(word), 1);
+            renderPool();
+            renderResult();
+          });
+        });
+      };
+      renderPool();
+      renderResult();
+    });
+    const submitBtn = scrambleWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
+    submitBtn.addEventListener("click", () => {
+      let userResponse = "Here are my answers for the Sentence Scramble:\n";
+      data.tasks.forEach((task, idx) => {
+        const userAnswer = (answers[idx] || []).join(" ");
+        const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(task.original);
+        const taskDiv = scrambleWrapper.querySelectorAll(".scramble-task")[idx];
+        taskDiv.removeClass("correct");
+        taskDiv.removeClass("wrong");
+        taskDiv.addClass(isCorrect ? "correct" : "wrong");
+        this.plugin.updateSRSProgress(task.word, isCorrect ? 5 : 1);
+        userResponse += `- Task ${idx + 1} (${task.word}): I ordered it as "${userAnswer}". (${isCorrect ? "Correct" : "Incorrect, it should be " + task.original})
+`;
+      });
+      submitBtn.disabled = true;
+      submitBtn.setText("Checked!");
+      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these constructions.";
+      this.sendMessage();
+    });
+  }
+  tryExtractChoice(str) {
+    const questions = [];
+    const qRegex = /\{[\s\S]*?definition["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?options["'\s:]+\[([^\]]*)\][\s\S]*?\}/gi;
+    let match;
+    while ((match = qRegex.exec(str)) !== null) {
+      const options = match[3].split(",").map((o) => o.replace(/^[":\s]+|[":\s]+$/g, "").trim());
+      questions.push({
+        definition: match[1].replace(/^[":\s]+/, "").trim(),
+        answer: match[2].replace(/^[":\s]+/, "").trim(),
+        options
+      });
+    }
+    return questions;
+  }
+  tryExtractScramble(str) {
+    const tasks = [];
+    const tRegex = /\{[\s\S]*?scrambled["'\s:]+([^"'\n\r\[]*)[\s\S]*?original["'\s:]+([^"'\n]*)["']?[\s\S]*?(?:word["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
+    let match;
+    while ((match = tRegex.exec(str)) !== null) {
+      tasks.push({
+        scrambled: match[1].replace(/^[":\s]+/, "").trim(),
+        original: match[2].replace(/^[":\s]+/, "").trim(),
+        word: (match[3] || "").replace(/^[":\s]+/, "").trim()
+      });
+    }
+    return tasks;
   }
   tryExtractFlashcards(str) {
     const items = [];
@@ -759,20 +913,24 @@ Error: ${e.toString()}`;
     });
     const submitBtn = quizWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
     submitBtn.addEventListener("click", async () => {
-      let userResponse = "Here are my answers for the quiz:\n";
+      let userResponse = "Here are my answers for the quiz (I've already highlighted them in the UI):\n";
       data.questions.forEach((q, idx) => {
         const userAnswer = (answers[idx] || "").trim();
-        const isCorrect = userAnswer.toLowerCase() === q.answer.toLowerCase();
-        const inputs = quizWrapper.querySelectorAll(`.quiz-question`)[idx].querySelectorAll(".quiz-input");
+        const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
+        const questionEl = quizWrapper.querySelectorAll(`.quiz-question`)[idx];
+        const inputs = questionEl.querySelectorAll(".quiz-input");
         inputs.forEach((input) => {
           input.removeClass("correct");
           input.removeClass("wrong");
           input.addClass(isCorrect ? "correct" : "wrong");
         });
-        userResponse += `- Question ${idx + 1}: Word: ${q.word}, My Answer: ${userAnswer} (${isCorrect ? "Correct" : "Wrong"})
+        this.plugin.updateSRSProgress(q.word, isCorrect ? 5 : 1);
+        userResponse += `- Question ${idx + 1} (${q.word}): My answer was "${userAnswer}". (${isCorrect ? "Correct" : "Incorrect, the right answer is " + q.answer})
 `;
       });
-      this.inputEl.value = userResponse + "\nPlease assess my performance.";
+      submitBtn.disabled = true;
+      submitBtn.setText("Checked!");
+      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
       this.sendMessage();
     });
   }
@@ -922,26 +1080,21 @@ IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code 
      ]
    }
    \`\`\`
-2. **Fill in the Blank**: After I review the flashcards, create 10 fill-in-the-blank sentences (one for each word).
-   \`\`\`json:quiz
-   {
-     "questions": [
-       { "sentence": "He was very [blank] when he heard the news.", "answer": "happy", "word": "happy" },
-       ...
-     ]
-   }
-   \`\`\`
-3. **Assessment**: After I complete the quiz, score my performance and provide feedback. Tell the plugin my score for each word (use 5 for Correct, 1 for Wrong) using:
-   \`\`\`json:assessment
-   {
-     "results": [
-       { "word": "word1", "score": 5 },
-       ...
-     ]
-   }
-   \`\`\`
+2. **Exercise**: Create interactive exercises for each word. You can choose from:
+   - **Fill in the Blank**:
+     \`\`\`json:quiz
+     { "questions": [{ "sentence": "He was [blank].", "answer": "happy", "word": "happy" }] }
+     \`\`\`
+   - **Multiple Choice**:
+     \`\`\`json:choice
+     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
+     \`\`\`
+   - **Sentence Scramble**:
+     \`\`\`json:scramble
+     { "tasks": [{ "scrambled": "is He happy today", "original": "He is happy today", "word": "happy" }] }
+     \`\`\`
 
-ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI.`;
+ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI. After providing the exercises, wait for me to check my answers. When I send you my answers, provide the correct answers and a brief explanation for each one to help me learn from my mistakes. (Note: The plugin handles the SRS progress automatically, so you don't need to provide scores).`;
     const view = await this.activateView();
     if (view) {
       view.startImprovement("Vocabulary Practice Session", prompt);
