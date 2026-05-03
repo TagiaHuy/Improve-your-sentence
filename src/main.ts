@@ -35,10 +35,24 @@ export default class ImproveYourSentencePlugin extends Plugin {
 		this.addCommand({
 			id: 'save-selected-vocabulary',
 			name: 'Save Selected to Vocabulary',
-			editorCallback: (editor: Editor) => {
-				const selection = editor.getSelection().trim();
+			callback: () => {
+				// Try editor selection first
+				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+				let selection = "";
+				if (activeView) {
+					selection = activeView.editor.getSelection().trim();
+				}
+				
+				// Fallback to window selection
+				if (!selection) {
+					selection = window.getSelection()?.toString().trim() || "";
+				}
+
 				if (selection) {
 					this.saveVocabulary(selection);
+				} else {
+					//@ts-ignore
+					new Notice("Please select some text first.");
 				}
 			}
 		});
@@ -73,7 +87,8 @@ export default class ImproveYourSentencePlugin extends Plugin {
 	async saveVocabulary(word: string, context?: string) {
 		const existing = this.settings.vocabulary.find(v => v.word.toLowerCase() === word.toLowerCase());
 		if (existing) {
-			console.log("Word already in vocabulary");
+			//@ts-ignore
+			new Notice(`"${word}" is already in your vocabulary.`);
 			return;
 		}
 
@@ -81,10 +96,7 @@ export default class ImproveYourSentencePlugin extends Plugin {
 			word: word,
 			context: context,
 			dateAdded: Date.now(),
-			nextReview: Date.now() + 24 * 60 * 60 * 1000, // Review in 1 day
-			interval: 1,
-			repetition: 1,
-			efactor: 2.5
+			reviewCount: 0 // New words start with 0 reviews (or 1 if you count saving as a review, but user usually means practice)
 		};
 
 		this.settings.vocabulary.push(newItem);
@@ -97,7 +109,10 @@ export default class ImproveYourSentencePlugin extends Plugin {
 		// Get 10 most recent words or words due for review
 		const now = Date.now();
 		const words = this.settings.vocabulary
-			.sort((a, b) => a.nextReview - b.nextReview)
+			.sort((a, b) => {
+				if (a.reviewCount !== b.reviewCount) return a.reviewCount - b.reviewCount;
+				return b.dateAdded - a.dateAdded;
+			})
 			.slice(0, 10);
 
 		if (words.length === 0) {
@@ -127,7 +142,7 @@ IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code 
      \`\`\`
    - **Multiple Choice**:
      \`\`\`json:choice
-     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
+     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "word": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
      \`\`\`
    - **Sentence Scramble**:
      \`\`\`json:scramble
@@ -136,38 +151,37 @@ IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code 
 
 ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI. After providing the exercises, wait for me to check my answers. When I send you my answers, provide the correct answers and a brief explanation for each one to help me learn from my mistakes. (Note: The plugin handles the SRS progress automatically, so you don't need to provide scores).`;
 
+		// Store the session words for /done to reference
+		this.settings.pendingUpdates = words.map(v => v.word);
+		await this.saveSettings();
+
 		const view = await this.activateView();
 		if (view) {
 			view.startImprovement("Vocabulary Practice Session", prompt);
 		}
 	}
 
-	async updateSRSProgress(word: string, quality: number) {
-		const item = this.settings.vocabulary.find(v => v.word.toLowerCase() === word.toLowerCase());
-		if (!item) return;
-
-		// SM-2 Algorithm
-		if (quality >= 3) {
-			if (item.repetition === 0) {
-				item.interval = 1;
-			} else if (item.repetition === 1) {
-				item.interval = 6;
-			} else {
-				item.interval = Math.round(item.interval * item.efactor);
+	async updateMultipleProgress(updates: string[]) {
+		let updatedCount = 0;
+		updates.forEach((word) => {
+			const item = this.settings.vocabulary.find(v => 
+				v.word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "") === 
+				word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "")
+			);
+			if (item) {
+				item.reviewCount = (item.reviewCount || 0) + 1;
+				updatedCount++;
 			}
-			item.repetition++;
-		} else {
-			item.repetition = 0;
-			item.interval = 1;
+		});
+
+		if (updatedCount > 0) {
+			await this.saveSettings();
+			new Notice(`Saved progress for ${updatedCount} words!`);
 		}
+	}
 
-		item.efactor = item.efactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-		if (item.efactor < 1.3) item.efactor = 1.3;
-
-		item.nextReview = Date.now() + item.interval * 24 * 60 * 60 * 1000;
-
-		await this.saveSettings();
-		console.log(`Updated SRS for ${word}: Interval=${item.interval}, Repetition=${item.repetition}, E-Factor=${item.efactor.toFixed(2)}, Next Review=${new Date(item.nextReview).toLocaleDateString()}`);
+	async updateSRSProgress(word: string, quality: number) {
+		await this.updateMultipleProgress([word]);
 	}
 
 	registerCustomCommands() {
@@ -215,6 +229,26 @@ ALWAYS include the code blocks exactly as defined above so the plugin can render
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		// Migration: Convert pendingUpdates from object {} to array []
+		if (this.settings.pendingUpdates && !Array.isArray(this.settings.pendingUpdates)) {
+			this.settings.pendingUpdates = [];
+			await this.saveSettings();
+		}
+		
+		// Migration: Convert repetition to reviewCount and clean up old keys
+		if (this.settings.vocabulary) {
+			this.settings.vocabulary.forEach((item: any) => {
+				if (item.repetition !== undefined && item.reviewCount === undefined) {
+					item.reviewCount = item.repetition;
+				}
+				// Clean up old fields
+				delete item.repetition;
+				delete item.nextReview;
+				delete item.interval;
+				delete item.efactor;
+			});
+			await this.saveSettings();
+		}
 	}
 
 	async saveSettings() {

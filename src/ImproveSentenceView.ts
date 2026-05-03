@@ -53,7 +53,8 @@ export class ImproveSentenceView extends ItemView {
                         .setTitle("Save to Vocabulary")
                         .setIcon("book-marked")
                         .onClick(async () => {
-                            this.plugin.saveVocabulary(selection);
+                            console.log("Sidebar Saving Selection:", selection);
+                            await this.plugin.saveVocabulary(selection);
                         });
                 });
                 menu.showAtMouseEvent(e);
@@ -115,7 +116,8 @@ export class ImproveSentenceView extends ItemView {
         );
 
         const buildInSuggestions = [
-            { id: 'test-vocab', name: 'Test Recent Vocabulary', prompt: 'AI helps you learn and test the 10 most recent words.' }
+            { id: 'test-vocab', name: 'Test Recent Vocabulary', prompt: 'AI helps you learn and test the 10 most recent words.' },
+            { id: 'done', name: 'done', prompt: 'Finish review session and save progress.' }
         ].filter(s => s.name.toLowerCase().includes(query.toLowerCase()));
 
         const allSuggestions = [...customPrompts, ...buildInSuggestions];
@@ -176,6 +178,10 @@ export class ImproveSentenceView extends ItemView {
             this.hideSuggestions();
             this.inputEl.value = '';
             this.plugin.testRecentVocabulary();
+        } else if (suggestion.id === 'done') {
+            this.hideSuggestions();
+            this.inputEl.value = '/done';
+            this.sendMessage();
         } else {
             this.inputEl.value = `/${suggestion.name} `;
             this.hideSuggestions();
@@ -186,6 +192,22 @@ export class ImproveSentenceView extends ItemView {
     async sendMessage() {
         let text = this.inputEl.value.trim();
         if (!text) return;
+
+        if (text === '/done') {
+            const updates = this.plugin.settings.pendingUpdates;
+            if (updates.length > 0) {
+                await this.plugin.updateMultipleProgress(updates);
+                this.plugin.settings.pendingUpdates = [];
+                await this.plugin.saveSettings();
+            } else {
+                //@ts-ignore
+                new Notice("No new progress to save.");
+            }
+            this.inputEl.value = "I have finished my practice session. Please wrap up.";
+            this.sendMessage();
+            return;
+        }
+
         this.inputEl.value = '';
 
         let usedPrompt = this.plugin.settings.customPrompts[0]?.prompt || '';
@@ -401,9 +423,10 @@ export class ImproveSentenceView extends ItemView {
         });
 
         const submitBtn = choiceWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
-        submitBtn.addEventListener('click', () => {
+        submitBtn.addEventListener('click', async () => {
             let userResponse = "Here are my answers for the Multiple Choice quiz:\n";
-            data.questions.forEach((q: any, idx: number) => {
+            for (let idx = 0; idx < data.questions.length; idx++) {
+                const q = data.questions[idx];
                 const userAnswer = answers[idx] || "(no answer selected)";
                 const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
                 
@@ -414,16 +437,13 @@ export class ImproveSentenceView extends ItemView {
                     if (this.normalizeAnswer(b.innerText) === this.normalizeAnswer(q.answer)) b.addClass('correct');
                     else if (b.hasClass('selected')) b.addClass('wrong');
                 });
-
-                // Automatic SRS Update
-                this.plugin.updateSRSProgress(q.answer, isCorrect ? 5 : 1);
                 
                 userResponse += `- Problem ${idx + 1} (Definition: ${q.definition.substring(0, 40)}...): I chose "${userAnswer}". (${isCorrect ? 'Correct' : 'Incorrect, the right word was ' + q.answer})\n`;
-            });
+            }
             submitBtn.disabled = true;
             submitBtn.setText('Checked!');
             
-            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
+            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers. (Type /done when finished)";
             this.sendMessage();
         });
     }
@@ -473,9 +493,10 @@ export class ImproveSentenceView extends ItemView {
         });
 
         const submitBtn = scrambleWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
-        submitBtn.addEventListener('click', () => {
+        submitBtn.addEventListener('click', async () => {
             let userResponse = "Here are my answers for the Sentence Scramble:\n";
-            data.tasks.forEach((task: any, idx: number) => {
+            for (let idx = 0; idx < data.tasks.length; idx++) {
+                const task = data.tasks[idx];
                 const userAnswer = (answers[idx] || []).join(' ');
                 const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(task.original);
                 
@@ -484,60 +505,29 @@ export class ImproveSentenceView extends ItemView {
                 taskDiv.removeClass('wrong');
                 taskDiv.addClass(isCorrect ? 'correct' : 'wrong');
 
-                // Automatic SRS Update
-                this.plugin.updateSRSProgress(task.word, isCorrect ? 5 : 1);
                 
                 userResponse += `- Task ${idx + 1} (${task.word}): I ordered it as "${userAnswer}". (${isCorrect ? 'Correct' : 'Incorrect, it should be ' + task.original})\n`;
-            });
+            }
             submitBtn.disabled = true;
             submitBtn.setText('Checked!');
             
-            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these constructions.";
+            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these constructions. (Type /done when finished)";
             this.sendMessage();
         });
     }
 
-    tryExtractChoice(str: string): any[] {
-        const questions: any[] = [];
-        const qRegex = /\{[\s\S]*?definition["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?options["'\s:]+\[([^\]]*)\][\s\S]*?\}/gi;
-        let match;
-        while ((match = qRegex.exec(str)) !== null) {
-            const options = match[3].split(',').map(o => o.replace(/^[":\s]+|[":\s]+$/g, '').trim());
-            questions.push({
-                definition: match[1].replace(/^[":\s]+/, '').trim(),
-                answer: match[2].replace(/^[":\s]+/, '').trim(),
-                options: options
-            });
-        }
-        return questions;
-    }
-
-    tryExtractScramble(str: string): any[] {
-        const tasks: any[] = [];
-        const tRegex = /\{[\s\S]*?scrambled["'\s:]+([^"'\n\r\[]*)[\s\S]*?original["'\s:]+([^"'\n]*)["']?[\s\S]*?(?:word["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
-        let match;
-        while ((match = tRegex.exec(str)) !== null) {
-            tasks.push({
-                scrambled: match[1].replace(/^[":\s]+/, '').trim(),
-                original: match[2].replace(/^[":\s]+/, '').trim(),
-                word: (match[3] || "").replace(/^[":\s]+/, '').trim()
-            });
-        }
-        return tasks;
-    }
-
     tryExtractFlashcards(str: string): any[] {
         const items: any[] = [];
-        // Match word, definition, and optional example with very loose requirements (handles missing colons, messy quotes)
-        const itemRegex = /\{[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?definition["'\s:]+([^"'\n]*)["']?(?:[\s\S]*?example["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
+        const objRegex = /\{[\s\S]*?\}/g;
         let match;
-        while ((match = itemRegex.exec(str)) !== null) {
-            if (match[1].trim() || match[2].trim()) {
-                items.push({
-                    word: match[1].replace(/^[":\s]+/, '').trim(),
-                    definition: match[2].replace(/^[":\s]+/, '').trim(),
-                    example: (match[3] || "").replace(/^[":\s]+/, '').trim()
-                });
+        while ((match = objRegex.exec(str)) !== null) {
+            const objStr = match[0];
+            const word = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const definition = /definition["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const example = /example["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            
+            if (word && definition) {
+                items.push({ word, definition, example: example || "" });
             }
         }
         return items;
@@ -545,16 +535,55 @@ export class ImproveSentenceView extends ItemView {
 
     tryExtractQuiz(str: string): any[] {
         const questions: any[] = [];
-        const questionRegex = /\{[\s\S]*?sentence["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?\}/gi;
+        const objRegex = /\{[\s\S]*?\}/g;
         let match;
-        while ((match = questionRegex.exec(str)) !== null) {
-            questions.push({
-                sentence: match[1].replace(/^[":\s]+/, '').trim(),
-                answer: match[2].replace(/^[":\s]+/, '').trim(),
-                word: match[3].replace(/^[":\s]+/, '').trim()
-            });
+        while ((match = objRegex.exec(str)) !== null) {
+            const objStr = match[0];
+            const sentence = /sentence["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const answer = /answer["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const word = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            
+            if (sentence && answer) {
+                questions.push({ sentence, answer, word: word || answer });
+            }
         }
         return questions;
+    }
+
+    tryExtractChoice(str: string): any[] {
+        const questions: any[] = [];
+        const objRegex = /\{[\s\S]*?\}/g;
+        let match;
+        while ((match = objRegex.exec(str)) !== null) {
+            const objStr = match[0];
+            const definition = /definition["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const answer = /answer["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const word = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const optionsMatch = /options["'\s:]+\[([^\]]*)\]/i.exec(objStr);
+            const options = optionsMatch ? optionsMatch[1].split(',').map(o => o.trim().replace(/^["']+/, '').replace(/["']+$/, '')) : [];
+            
+            if (definition && answer) {
+                questions.push({ definition, answer, word: word || answer, options });
+            }
+        }
+        return questions;
+    }
+
+    tryExtractScramble(str: string): any[] {
+        const tasks: any[] = [];
+        const objRegex = /\{[\s\S]*?\}/g;
+        let match;
+        while ((match = objRegex.exec(str)) !== null) {
+            const objStr = match[0];
+            const scrambled = /scrambled["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const original = /original["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            const word = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)?.[1]?.replace(/^[":\s]+/, '').replace(/["']+$/, '').trim();
+            
+            if (scrambled && original) {
+                tasks.push({ scrambled, original, word: word || original });
+            }
+        }
+        return tasks;
     }
 
     tryExtractAssessment(str: string): any[] {
@@ -644,7 +673,8 @@ export class ImproveSentenceView extends ItemView {
         const submitBtn = quizWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
         submitBtn.addEventListener('click', async () => {
             let userResponse = "Here are my answers for the quiz (I've already highlighted them in the UI):\n";
-            data.questions.forEach((q: any, idx: number) => {
+            for (let idx = 0; idx < data.questions.length; idx++) {
+                const q = data.questions[idx];
                 const userAnswer = (answers[idx] || "").trim();
                 const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
                 
@@ -656,17 +686,14 @@ export class ImproveSentenceView extends ItemView {
                     input.removeClass('wrong');
                     input.addClass(isCorrect ? 'correct' : 'wrong');
                 });
-
-                // Automatic SRS Update
-                this.plugin.updateSRSProgress(q.word, isCorrect ? 5 : 1);
                 
                 userResponse += `- Question ${idx + 1} (${q.word}): My answer was "${userAnswer}". (${isCorrect ? 'Correct' : 'Incorrect, the right answer is ' + q.answer})\n`;
-            });
+            }
             
             submitBtn.disabled = true;
             submitBtn.setText('Checked!');
             
-            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
+            this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers. (Type /done when finished)";
             this.sendMessage();
         });
     }

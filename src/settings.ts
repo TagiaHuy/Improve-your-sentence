@@ -11,10 +11,7 @@ export interface VocabularyItem {
 	word: string;
 	context?: string;
 	dateAdded: number;
-	nextReview: number;
-	interval: number;
-	repetition: number;
-	efactor: number;
+	reviewCount: number;
 }
 
 export interface ImproveYourSentenceSettings {
@@ -27,6 +24,7 @@ export interface ImproveYourSentenceSettings {
 	openRouterModel: string;
 	customPrompts: CustomPrompt[];
 	vocabulary: VocabularyItem[];
+	pendingUpdates: string[];
 }
 
 export const DEFAULT_SETTINGS: ImproveYourSentenceSettings = {
@@ -58,7 +56,8 @@ Output nothing else.`
 			prompt: 'Translate the following text to Vietnamese.'
 		}
 	],
-	vocabulary: []
+	vocabulary: [],
+	pendingUpdates: []
 }
 
 export class ImproveYourSentenceSettingTab extends PluginSettingTab {
@@ -229,12 +228,15 @@ export class ImproveYourSentenceSettingTab extends PluginSettingTab {
 			const header = table.createEl('thead').createEl('tr');
 			header.createEl('th', { text: 'Word' });
 			header.createEl('th', { text: 'Added' });
-			header.createEl('th', { text: 'Next Review' });
+			header.createEl('th', { text: 'Reviews' });
 			header.createEl('th', { text: 'Actions' });
 
 			const tbody = table.createEl('tbody');
 			
-			const sortedVocab = [...this.plugin.settings.vocabulary].sort((a, b) => a.nextReview - b.nextReview);
+			const sortedVocab = [...this.plugin.settings.vocabulary].sort((a, b) => {
+				if (a.reviewCount !== b.reviewCount) return a.reviewCount - b.reviewCount;
+				return b.dateAdded - a.dateAdded; // Use dateAdded search priority for same count
+			});
 			const start = this.vocabPage * this.vocabPageSize;
 			const end = start + this.vocabPageSize;
 			const pagedVocab = sortedVocab.slice(start, end);
@@ -243,7 +245,7 @@ export class ImproveYourSentenceSettingTab extends PluginSettingTab {
 				const row = tbody.createEl('tr');
 				row.createEl('td', { text: item.word });
 				row.createEl('td', { text: new Date(item.dateAdded).toLocaleDateString() });
-				row.createEl('td', { text: new Date(item.nextReview).toLocaleDateString() });
+				row.createEl('td', { text: item.reviewCount.toString() });
 				
 				const actionsCell = row.createEl('td');
 				const deleteBtn = actionsCell.createEl('button', { cls: 'vocab-delete-btn' });

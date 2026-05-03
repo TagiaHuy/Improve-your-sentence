@@ -60,7 +60,8 @@ Output nothing else.`
       prompt: "Translate the following text to Vietnamese."
     }
   ],
-  vocabulary: []
+  vocabulary: [],
+  pendingUpdates: []
 };
 var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -163,10 +164,14 @@ var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingT
       const header = table.createEl("thead").createEl("tr");
       header.createEl("th", { text: "Word" });
       header.createEl("th", { text: "Added" });
-      header.createEl("th", { text: "Next Review" });
+      header.createEl("th", { text: "Reviews" });
       header.createEl("th", { text: "Actions" });
       const tbody = table.createEl("tbody");
-      const sortedVocab = [...this.plugin.settings.vocabulary].sort((a, b) => a.nextReview - b.nextReview);
+      const sortedVocab = [...this.plugin.settings.vocabulary].sort((a, b) => {
+        if (a.reviewCount !== b.reviewCount)
+          return a.reviewCount - b.reviewCount;
+        return b.dateAdded - a.dateAdded;
+      });
       const start = this.vocabPage * this.vocabPageSize;
       const end = start + this.vocabPageSize;
       const pagedVocab = sortedVocab.slice(start, end);
@@ -174,7 +179,7 @@ var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingT
         const row = tbody.createEl("tr");
         row.createEl("td", { text: item.word });
         row.createEl("td", { text: new Date(item.dateAdded).toLocaleDateString() });
-        row.createEl("td", { text: new Date(item.nextReview).toLocaleDateString() });
+        row.createEl("td", { text: item.reviewCount.toString() });
         const actionsCell = row.createEl("td");
         const deleteBtn = actionsCell.createEl("button", { cls: "vocab-delete-btn" });
         (0, import_obsidian.setIcon)(deleteBtn, "trash");
@@ -387,7 +392,8 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
         const menu = new import_obsidian2.Menu();
         menu.addItem((item) => {
           item.setTitle("Save to Vocabulary").setIcon("book-marked").onClick(async () => {
-            this.plugin.saveVocabulary(selection);
+            console.log("Sidebar Saving Selection:", selection);
+            await this.plugin.saveVocabulary(selection);
           });
         });
         menu.showAtMouseEvent(e);
@@ -438,7 +444,8 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
       (p) => p.name.toLowerCase().includes(query.toLowerCase())
     );
     const buildInSuggestions = [
-      { id: "test-vocab", name: "Test Recent Vocabulary", prompt: "AI helps you learn and test the 10 most recent words." }
+      { id: "test-vocab", name: "Test Recent Vocabulary", prompt: "AI helps you learn and test the 10 most recent words." },
+      { id: "done", name: "done", prompt: "Finish review session and save progress." }
     ].filter((s) => s.name.toLowerCase().includes(query.toLowerCase()));
     const allSuggestions = [...customPrompts, ...buildInSuggestions];
     if (allSuggestions.length === 0) {
@@ -493,6 +500,10 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
       this.hideSuggestions();
       this.inputEl.value = "";
       this.plugin.testRecentVocabulary();
+    } else if (suggestion.id === "done") {
+      this.hideSuggestions();
+      this.inputEl.value = "/done";
+      this.sendMessage();
     } else {
       this.inputEl.value = `/${suggestion.name} `;
       this.hideSuggestions();
@@ -504,6 +515,19 @@ var ImproveSentenceView = class extends import_obsidian2.ItemView {
     let text = this.inputEl.value.trim();
     if (!text)
       return;
+    if (text === "/done") {
+      const updates = this.plugin.settings.pendingUpdates;
+      if (updates.length > 0) {
+        await this.plugin.updateMultipleProgress(updates);
+        this.plugin.settings.pendingUpdates = [];
+        await this.plugin.saveSettings();
+      } else {
+        new Notice("No new progress to save.");
+      }
+      this.inputEl.value = "I have finished my practice session. Please wrap up.";
+      this.sendMessage();
+      return;
+    }
     this.inputEl.value = "";
     let usedPrompt = ((_a = this.plugin.settings.customPrompts[0]) == null ? void 0 : _a.prompt) || "";
     for (const prompt of this.plugin.settings.customPrompts) {
@@ -705,9 +729,10 @@ Error: ${e.toString()}`;
       });
     });
     const submitBtn = choiceWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
-    submitBtn.addEventListener("click", () => {
+    submitBtn.addEventListener("click", async () => {
       let userResponse = "Here are my answers for the Multiple Choice quiz:\n";
-      data.questions.forEach((q, idx) => {
+      for (let idx = 0; idx < data.questions.length; idx++) {
+        const q = data.questions[idx];
         const userAnswer = answers[idx] || "(no answer selected)";
         const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
         const questionDiv = choiceWrapper.querySelectorAll(".choice-question")[idx];
@@ -719,13 +744,12 @@ Error: ${e.toString()}`;
           else if (b.hasClass("selected"))
             b.addClass("wrong");
         });
-        this.plugin.updateSRSProgress(q.answer, isCorrect ? 5 : 1);
         userResponse += `- Problem ${idx + 1} (Definition: ${q.definition.substring(0, 40)}...): I chose "${userAnswer}". (${isCorrect ? "Correct" : "Incorrect, the right word was " + q.answer})
 `;
-      });
+      }
       submitBtn.disabled = true;
       submitBtn.setText("Checked!");
-      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
+      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers. (Type /done when finished)";
       this.sendMessage();
     });
   }
@@ -768,79 +792,90 @@ Error: ${e.toString()}`;
       renderResult();
     });
     const submitBtn = scrambleWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
-    submitBtn.addEventListener("click", () => {
+    submitBtn.addEventListener("click", async () => {
       let userResponse = "Here are my answers for the Sentence Scramble:\n";
-      data.tasks.forEach((task, idx) => {
+      for (let idx = 0; idx < data.tasks.length; idx++) {
+        const task = data.tasks[idx];
         const userAnswer = (answers[idx] || []).join(" ");
         const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(task.original);
         const taskDiv = scrambleWrapper.querySelectorAll(".scramble-task")[idx];
         taskDiv.removeClass("correct");
         taskDiv.removeClass("wrong");
         taskDiv.addClass(isCorrect ? "correct" : "wrong");
-        this.plugin.updateSRSProgress(task.word, isCorrect ? 5 : 1);
         userResponse += `- Task ${idx + 1} (${task.word}): I ordered it as "${userAnswer}". (${isCorrect ? "Correct" : "Incorrect, it should be " + task.original})
 `;
-      });
+      }
       submitBtn.disabled = true;
       submitBtn.setText("Checked!");
-      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these constructions.";
+      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these constructions. (Type /done when finished)";
       this.sendMessage();
     });
   }
-  tryExtractChoice(str) {
-    const questions = [];
-    const qRegex = /\{[\s\S]*?definition["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?options["'\s:]+\[([^\]]*)\][\s\S]*?\}/gi;
-    let match;
-    while ((match = qRegex.exec(str)) !== null) {
-      const options = match[3].split(",").map((o) => o.replace(/^[":\s]+|[":\s]+$/g, "").trim());
-      questions.push({
-        definition: match[1].replace(/^[":\s]+/, "").trim(),
-        answer: match[2].replace(/^[":\s]+/, "").trim(),
-        options
-      });
-    }
-    return questions;
-  }
-  tryExtractScramble(str) {
-    const tasks = [];
-    const tRegex = /\{[\s\S]*?scrambled["'\s:]+([^"'\n\r\[]*)[\s\S]*?original["'\s:]+([^"'\n]*)["']?[\s\S]*?(?:word["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
-    let match;
-    while ((match = tRegex.exec(str)) !== null) {
-      tasks.push({
-        scrambled: match[1].replace(/^[":\s]+/, "").trim(),
-        original: match[2].replace(/^[":\s]+/, "").trim(),
-        word: (match[3] || "").replace(/^[":\s]+/, "").trim()
-      });
-    }
-    return tasks;
-  }
   tryExtractFlashcards(str) {
+    var _a, _b, _c, _d, _e, _f;
     const items = [];
-    const itemRegex = /\{[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?definition["'\s:]+([^"'\n]*)["']?(?:[\s\S]*?example["'\s:]+([^"'\n]*)["']?)?[\s\S]*?\}/gi;
+    const objRegex = /\{[\s\S]*?\}/g;
     let match;
-    while ((match = itemRegex.exec(str)) !== null) {
-      if (match[1].trim() || match[2].trim()) {
-        items.push({
-          word: match[1].replace(/^[":\s]+/, "").trim(),
-          definition: match[2].replace(/^[":\s]+/, "").trim(),
-          example: (match[3] || "").replace(/^[":\s]+/, "").trim()
-        });
+    while ((match = objRegex.exec(str)) !== null) {
+      const objStr = match[0];
+      const word = (_b = (_a = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _a[1]) == null ? void 0 : _b.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const definition = (_d = (_c = /definition["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _c[1]) == null ? void 0 : _d.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const example = (_f = (_e = /example["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _e[1]) == null ? void 0 : _f.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      if (word && definition) {
+        items.push({ word, definition, example: example || "" });
       }
     }
     return items;
   }
   tryExtractQuiz(str) {
+    var _a, _b, _c, _d, _e, _f;
     const questions = [];
-    const questionRegex = /\{[\s\S]*?sentence["'\s:]+([^"'\n]*)["']?[\s\S]*?answer["'\s:]+([^"'\n]*)["']?[\s\S]*?word["'\s:]+([^"'\n]*)["']?[\s\S]*?\}/gi;
+    const objRegex = /\{[\s\S]*?\}/g;
     let match;
-    while ((match = questionRegex.exec(str)) !== null) {
-      questions.push({
-        sentence: match[1].replace(/^[":\s]+/, "").trim(),
-        answer: match[2].replace(/^[":\s]+/, "").trim(),
-        word: match[3].replace(/^[":\s]+/, "").trim()
-      });
+    while ((match = objRegex.exec(str)) !== null) {
+      const objStr = match[0];
+      const sentence = (_b = (_a = /sentence["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _a[1]) == null ? void 0 : _b.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const answer = (_d = (_c = /answer["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _c[1]) == null ? void 0 : _d.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const word = (_f = (_e = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _e[1]) == null ? void 0 : _f.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      if (sentence && answer) {
+        questions.push({ sentence, answer, word: word || answer });
+      }
     }
     return questions;
+  }
+  tryExtractChoice(str) {
+    var _a, _b, _c, _d, _e, _f;
+    const questions = [];
+    const objRegex = /\{[\s\S]*?\}/g;
+    let match;
+    while ((match = objRegex.exec(str)) !== null) {
+      const objStr = match[0];
+      const definition = (_b = (_a = /definition["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _a[1]) == null ? void 0 : _b.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const answer = (_d = (_c = /answer["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _c[1]) == null ? void 0 : _d.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const word = (_f = (_e = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _e[1]) == null ? void 0 : _f.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const optionsMatch = /options["'\s:]+\[([^\]]*)\]/i.exec(objStr);
+      const options = optionsMatch ? optionsMatch[1].split(",").map((o) => o.trim().replace(/^["']+/, "").replace(/["']+$/, "")) : [];
+      if (definition && answer) {
+        questions.push({ definition, answer, word: word || answer, options });
+      }
+    }
+    return questions;
+  }
+  tryExtractScramble(str) {
+    var _a, _b, _c, _d, _e, _f;
+    const tasks = [];
+    const objRegex = /\{[\s\S]*?\}/g;
+    let match;
+    while ((match = objRegex.exec(str)) !== null) {
+      const objStr = match[0];
+      const scrambled = (_b = (_a = /scrambled["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _a[1]) == null ? void 0 : _b.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const original = (_d = (_c = /original["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _c[1]) == null ? void 0 : _d.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      const word = (_f = (_e = /word["'\s:]+([^"'\n,]*)/i.exec(objStr)) == null ? void 0 : _e[1]) == null ? void 0 : _f.replace(/^[":\s]+/, "").replace(/["']+$/, "").trim();
+      if (scrambled && original) {
+        tasks.push({ scrambled, original, word: word || original });
+      }
+    }
+    return tasks;
   }
   tryExtractAssessment(str) {
     const results = [];
@@ -914,7 +949,8 @@ Error: ${e.toString()}`;
     const submitBtn = quizWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
     submitBtn.addEventListener("click", async () => {
       let userResponse = "Here are my answers for the quiz (I've already highlighted them in the UI):\n";
-      data.questions.forEach((q, idx) => {
+      for (let idx = 0; idx < data.questions.length; idx++) {
+        const q = data.questions[idx];
         const userAnswer = (answers[idx] || "").trim();
         const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
         const questionEl = quizWrapper.querySelectorAll(`.quiz-question`)[idx];
@@ -924,13 +960,12 @@ Error: ${e.toString()}`;
           input.removeClass("wrong");
           input.addClass(isCorrect ? "correct" : "wrong");
         });
-        this.plugin.updateSRSProgress(q.word, isCorrect ? 5 : 1);
         userResponse += `- Question ${idx + 1} (${q.word}): My answer was "${userAnswer}". (${isCorrect ? "Correct" : "Incorrect, the right answer is " + q.answer})
 `;
-      });
+      }
       submitBtn.disabled = true;
       submitBtn.setText("Checked!");
-      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers.";
+      this.inputEl.value = userResponse + "\nPlease provide brief explanations for these answers. (Type /done when finished)";
       this.sendMessage();
     });
   }
@@ -1010,10 +1045,20 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
     this.addCommand({
       id: "save-selected-vocabulary",
       name: "Save Selected to Vocabulary",
-      editorCallback: (editor) => {
-        const selection = editor.getSelection().trim();
+      callback: () => {
+        var _a;
+        const activeView = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+        let selection = "";
+        if (activeView) {
+          selection = activeView.editor.getSelection().trim();
+        }
+        if (!selection) {
+          selection = ((_a = window.getSelection()) == null ? void 0 : _a.toString().trim()) || "";
+        }
         if (selection) {
           this.saveVocabulary(selection);
+        } else {
+          new import_obsidian3.Notice("Please select some text first.");
         }
       }
     });
@@ -1041,18 +1086,15 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
   async saveVocabulary(word, context) {
     const existing = this.settings.vocabulary.find((v) => v.word.toLowerCase() === word.toLowerCase());
     if (existing) {
-      console.log("Word already in vocabulary");
+      new import_obsidian3.Notice(`"${word}" is already in your vocabulary.`);
       return;
     }
     const newItem = {
       word,
       context,
       dateAdded: Date.now(),
-      nextReview: Date.now() + 24 * 60 * 60 * 1e3,
-      // Review in 1 day
-      interval: 1,
-      repetition: 1,
-      efactor: 2.5
+      reviewCount: 0
+      // New words start with 0 reviews (or 1 if you count saving as a review, but user usually means practice)
     };
     this.settings.vocabulary.push(newItem);
     await this.saveSettings();
@@ -1060,7 +1102,11 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
   }
   async testRecentVocabulary() {
     const now = Date.now();
-    const words = this.settings.vocabulary.sort((a, b) => a.nextReview - b.nextReview).slice(0, 10);
+    const words = this.settings.vocabulary.sort((a, b) => {
+      if (a.reviewCount !== b.reviewCount)
+        return a.reviewCount - b.reviewCount;
+      return b.dateAdded - a.dateAdded;
+    }).slice(0, 10);
     if (words.length === 0) {
       new import_obsidian3.Notice("No vocabulary words saved yet.");
       return;
@@ -1087,7 +1133,7 @@ IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code 
      \`\`\`
    - **Multiple Choice**:
      \`\`\`json:choice
-     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
+     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "word": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
      \`\`\`
    - **Sentence Scramble**:
      \`\`\`json:scramble
@@ -1095,34 +1141,31 @@ IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code 
      \`\`\`
 
 ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI. After providing the exercises, wait for me to check my answers. When I send you my answers, provide the correct answers and a brief explanation for each one to help me learn from my mistakes. (Note: The plugin handles the SRS progress automatically, so you don't need to provide scores).`;
+    this.settings.pendingUpdates = words.map((v) => v.word);
+    await this.saveSettings();
     const view = await this.activateView();
     if (view) {
       view.startImprovement("Vocabulary Practice Session", prompt);
     }
   }
-  async updateSRSProgress(word, quality) {
-    const item = this.settings.vocabulary.find((v) => v.word.toLowerCase() === word.toLowerCase());
-    if (!item)
-      return;
-    if (quality >= 3) {
-      if (item.repetition === 0) {
-        item.interval = 1;
-      } else if (item.repetition === 1) {
-        item.interval = 6;
-      } else {
-        item.interval = Math.round(item.interval * item.efactor);
+  async updateMultipleProgress(updates) {
+    let updatedCount = 0;
+    updates.forEach((word) => {
+      const item = this.settings.vocabulary.find(
+        (v) => v.word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "") === word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "")
+      );
+      if (item) {
+        item.reviewCount = (item.reviewCount || 0) + 1;
+        updatedCount++;
       }
-      item.repetition++;
-    } else {
-      item.repetition = 0;
-      item.interval = 1;
+    });
+    if (updatedCount > 0) {
+      await this.saveSettings();
+      new import_obsidian3.Notice(`Saved progress for ${updatedCount} words!`);
     }
-    item.efactor = item.efactor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-    if (item.efactor < 1.3)
-      item.efactor = 1.3;
-    item.nextReview = Date.now() + item.interval * 24 * 60 * 60 * 1e3;
-    await this.saveSettings();
-    console.log(`Updated SRS for ${word}: Interval=${item.interval}, Repetition=${item.repetition}, E-Factor=${item.efactor.toFixed(2)}, Next Review=${new Date(item.nextReview).toLocaleDateString()}`);
+  }
+  async updateSRSProgress(word, quality) {
+    await this.updateMultipleProgress([word]);
   }
   registerCustomCommands() {
     this.settings.customPrompts.forEach((prompt) => {
@@ -1164,6 +1207,22 @@ ALWAYS include the code blocks exactly as defined above so the plugin can render
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (this.settings.pendingUpdates && !Array.isArray(this.settings.pendingUpdates)) {
+      this.settings.pendingUpdates = [];
+      await this.saveSettings();
+    }
+    if (this.settings.vocabulary) {
+      this.settings.vocabulary.forEach((item) => {
+        if (item.repetition !== void 0 && item.reviewCount === void 0) {
+          item.reviewCount = item.repetition;
+        }
+        delete item.repetition;
+        delete item.nextReview;
+        delete item.interval;
+        delete item.efactor;
+      });
+      await this.saveSettings();
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
