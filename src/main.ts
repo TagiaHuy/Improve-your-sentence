@@ -1,4 +1,4 @@
-import { Plugin, Editor, MarkdownView, Notice } from 'obsidian';
+import { Plugin, Editor, MarkdownView, Notice, View } from 'obsidian';
 import { ImproveYourSentenceSettingTab, ImproveYourSentenceSettings, DEFAULT_SETTINGS } from './settings';
 import { ImproveSentenceView, IMPROVE_SENTENCE_VIEW_TYPE } from './ImproveSentenceView';
 
@@ -36,17 +36,7 @@ export default class ImproveYourSentencePlugin extends Plugin {
 			id: 'save-selected-vocabulary',
 			name: 'Save Selected to Vocabulary',
 			callback: () => {
-				// Try editor selection first
-				const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				let selection = "";
-				if (activeView) {
-					selection = activeView.editor.getSelection().trim();
-				}
-				
-				// Fallback to window selection
-				if (!selection) {
-					selection = window.getSelection()?.toString().trim() || "";
-				}
+				const selection = this.getSelectionText();
 
 				if (selection) {
 					this.saveVocabulary(selection);
@@ -184,14 +174,38 @@ ALWAYS include the code blocks exactly as defined above so the plugin can render
 		await this.updateMultipleProgress([word]);
 	}
 
+	private getSelectionText(): string {
+		// 1. Try Markdown Editor
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (activeView) {
+			const selection = activeView.editor.getSelection().trim();
+			if (selection) return selection;
+		}
+
+		// 2. Try window selection
+		const windowSelection = window.getSelection()?.toString().trim();
+		if (windowSelection) return windowSelection;
+
+		// 3. Try PDF View specifically
+		const genericView = this.app.workspace.activeLeaf?.view;
+		if (genericView && genericView.getViewType() === 'pdf') {
+			// @ts-ignore
+			const pdfSelection = genericView.viewer?.child?.getTextSelection?.();
+			if (pdfSelection) return pdfSelection.trim();
+		}
+
+		return "";
+	}
+
 	registerCustomCommands() {
 		this.settings.customPrompts.forEach(prompt => {
 			this.addCommand({
 				id: `prompt-${prompt.id}`,
 				name: `Prompt: ${prompt.name}`,
-				editorCallback: (editor: Editor) => {
-					const selection = editor.getSelection();
-					if (selection.trim() === '') {
+				callback: () => {
+					const selection = this.getSelectionText();
+					if (!selection) {
+						new Notice("Please select some text first.");
 						return;
 					}
 					this.activateView().then((v) => {

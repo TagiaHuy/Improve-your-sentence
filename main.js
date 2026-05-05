@@ -1046,15 +1046,7 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
       id: "save-selected-vocabulary",
       name: "Save Selected to Vocabulary",
       callback: () => {
-        var _a;
-        const activeView = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
-        let selection = "";
-        if (activeView) {
-          selection = activeView.editor.getSelection().trim();
-        }
-        if (!selection) {
-          selection = ((_a = window.getSelection()) == null ? void 0 : _a.toString().trim()) || "";
-        }
+        const selection = this.getSelectionText();
         if (selection) {
           this.saveVocabulary(selection);
         } else {
@@ -1167,14 +1159,34 @@ ALWAYS include the code blocks exactly as defined above so the plugin can render
   async updateSRSProgress(word, quality) {
     await this.updateMultipleProgress([word]);
   }
+  getSelectionText() {
+    var _a, _b, _c, _d, _e;
+    const activeView = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+    if (activeView) {
+      const selection = activeView.editor.getSelection().trim();
+      if (selection)
+        return selection;
+    }
+    const windowSelection = (_a = window.getSelection()) == null ? void 0 : _a.toString().trim();
+    if (windowSelection)
+      return windowSelection;
+    const genericView = (_b = this.app.workspace.activeLeaf) == null ? void 0 : _b.view;
+    if (genericView && genericView.getViewType() === "pdf") {
+      const pdfSelection = (_e = (_d = (_c = genericView.viewer) == null ? void 0 : _c.child) == null ? void 0 : _d.getTextSelection) == null ? void 0 : _e.call(_d);
+      if (pdfSelection)
+        return pdfSelection.trim();
+    }
+    return "";
+  }
   registerCustomCommands() {
     this.settings.customPrompts.forEach((prompt) => {
       this.addCommand({
         id: `prompt-${prompt.id}`,
         name: `Prompt: ${prompt.name}`,
-        editorCallback: (editor) => {
-          const selection = editor.getSelection();
-          if (selection.trim() === "") {
+        callback: () => {
+          const selection = this.getSelectionText();
+          if (!selection) {
+            new import_obsidian3.Notice("Please select some text first.");
             return;
           }
           this.activateView().then((v) => {
