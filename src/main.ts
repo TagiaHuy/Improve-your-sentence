@@ -111,35 +111,8 @@ export default class ImproveYourSentencePlugin extends Plugin {
 		}
 
 		const wordList = words.map(v => v.word).join(", ");
-		const prompt = `You are a Vocabulary Mentor helping me master these 10 words: ${wordList}.
-Always guide me through these steps sequentially. Start with Step 1: Flashcards.
-
-IMPORTANT: You MUST ONLY output the JSON data inside the specific markdown code blocks as shown below. Do not include extra text or ignore the block format.
-
-1. **Flashcards**: Provide definitions and example sentences for each word.
-   \`\`\`json:flashcards
-   {
-     "items": [
-       { "word": "word1", "definition": "...", "example": "..." },
-       ...
-     ]
-   }
-   \`\`\`
-2. **Exercise**: Create interactive exercises for each word. You can choose from:
-   - **Fill in the Blank**:
-     \`\`\`json:quiz
-     { "questions": [{ "sentence": "He was [blank].", "answer": "happy", "word": "happy" }] }
-     \`\`\`
-   - **Multiple Choice**:
-     \`\`\`json:choice
-     { "questions": [{ "definition": "Feeling pleasure.", "answer": "happy", "word": "happy", "options": ["happy", "sad", "angry", "tired"] }] }
-     \`\`\`
-   - **Sentence Scramble**:
-     \`\`\`json:scramble
-     { "tasks": [{ "scrambled": "is He happy today", "original": "He is happy today", "word": "happy" }] }
-     \`\`\`
-
-ALWAYS include the code blocks exactly as defined above so the plugin can render the interactive UI. After providing the exercises, wait for me to check my answers. When I send you my answers, provide the correct answers and a brief explanation for each one to help me learn from my mistakes. (Note: The plugin handles the SRS progress automatically, so you don't need to provide scores).`;
+		let prompt = this.settings.vocabularyTestPrompt || DEFAULT_SETTINGS.vocabularyTestPrompt;
+		prompt = prompt.replace("{{words}}", wordList);
 
 		// Store the session words for /done to reference
 		this.settings.pendingUpdates = words.map(v => v.word);
