@@ -201,6 +201,7 @@ var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingT
       const header = table.createEl("thead").createEl("tr");
       header.createEl("th", { text: "Word" });
       header.createEl("th", { text: "Added" });
+      header.createEl("th", { text: "Next Review" });
       header.createEl("th", { text: "Reviews" });
       header.createEl("th", { text: "Actions" });
       const tbody = table.createEl("tbody");
@@ -216,6 +217,7 @@ var ImproveYourSentenceSettingTab = class extends import_obsidian.PluginSettingT
         const row = tbody.createEl("tr");
         row.createEl("td", { text: item.word });
         row.createEl("td", { text: new Date(item.dateAdded).toLocaleDateString() });
+        row.createEl("td", { text: item.nextReview ? new Date(item.nextReview).toLocaleDateString() : "New" });
         row.createEl("td", { text: item.reviewCount.toString() });
         const actionsCell = row.createEl("td");
         const deleteBtn = actionsCell.createEl("button", { cls: "vocab-delete-btn" });
@@ -1115,7 +1117,13 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
   async saveVocabulary(word, context) {
     const existing = this.settings.vocabulary.find((v) => v.word.toLowerCase() === word.toLowerCase());
     if (existing) {
-      new import_obsidian3.Notice(`"${word}" is already in your vocabulary.`);
+      existing.reviewCount = 0;
+      existing.nextReview = void 0;
+      existing.interval = void 0;
+      if (context)
+        existing.context = context;
+      await this.saveSettings();
+      new import_obsidian3.Notice(`"${word}" already exists. Review progress has been reset.`);
       return;
     }
     const newItem = {
@@ -1131,11 +1139,18 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
   }
   async testRecentVocabulary() {
     const now = Date.now();
-    const words = this.settings.vocabulary.sort((a, b) => {
-      if (a.reviewCount !== b.reviewCount)
-        return a.reviewCount - b.reviewCount;
-      return b.dateAdded - a.dateAdded;
-    }).slice(0, 10);
+    let words = this.settings.vocabulary.filter((v) => v.nextReview && v.nextReview <= now).sort((a, b) => (a.nextReview || 0) - (b.nextReview || 0));
+    if (words.length < 10) {
+      const existingIds = new Set(words.map((w) => w.word));
+      const otherWords = this.settings.vocabulary.filter((v) => !existingIds.has(v.word)).sort((a, b) => {
+        if (a.reviewCount !== b.reviewCount)
+          return a.reviewCount - b.reviewCount;
+        return b.dateAdded - a.dateAdded;
+      });
+      words = words.concat(otherWords.slice(0, 10 - words.length));
+    } else {
+      words = words.slice(0, 10);
+    }
     if (words.length === 0) {
       new import_obsidian3.Notice("No vocabulary words saved yet.");
       return;
@@ -1152,12 +1167,29 @@ var ImproveYourSentencePlugin = class extends import_obsidian3.Plugin {
   }
   async updateMultipleProgress(updates) {
     let updatedCount = 0;
+    const now = Date.now();
     updates.forEach((word) => {
       const item = this.settings.vocabulary.find(
         (v) => v.word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "") === word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "")
       );
       if (item) {
         item.reviewCount = (item.reviewCount || 0) + 1;
+        let intervalDays = 1;
+        const count = item.reviewCount;
+        if (count === 1)
+          intervalDays = 1;
+        else if (count === 2)
+          intervalDays = 3;
+        else if (count === 3)
+          intervalDays = 7;
+        else if (count === 4)
+          intervalDays = 14;
+        else if (count === 5)
+          intervalDays = 30;
+        else
+          intervalDays = 60;
+        item.interval = intervalDays;
+        item.nextReview = now + intervalDays * 24 * 60 * 60 * 1e3;
         updatedCount++;
       }
     });

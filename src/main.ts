@@ -77,8 +77,14 @@ export default class ImproveYourSentencePlugin extends Plugin {
 	async saveVocabulary(word: string, context?: string) {
 		const existing = this.settings.vocabulary.find(v => v.word.toLowerCase() === word.toLowerCase());
 		if (existing) {
+			existing.reviewCount = 0;
+			existing.nextReview = undefined;
+			existing.interval = undefined;
+			if (context) existing.context = context;
+			
+			await this.saveSettings();
 			//@ts-ignore
-			new Notice(`"${word}" is already in your vocabulary.`);
+			new Notice(`"${word}" already exists. Review progress has been reset.`);
 			return;
 		}
 
@@ -96,14 +102,28 @@ export default class ImproveYourSentencePlugin extends Plugin {
 	}
 
 	async testRecentVocabulary() {
-		// Get 10 most recent words or words due for review
 		const now = Date.now();
-		const words = this.settings.vocabulary
-			.sort((a, b) => {
-				if (a.reviewCount !== b.reviewCount) return a.reviewCount - b.reviewCount;
-				return b.dateAdded - a.dateAdded;
-			})
-			.slice(0, 10);
+		
+		// 1. Get words due for review
+		let words = this.settings.vocabulary
+			.filter(v => v.nextReview && v.nextReview <= now)
+			.sort((a, b) => (a.nextReview || 0) - (b.nextReview || 0));
+
+		// 2. If not enough due words, add new words or words with low review count
+		if (words.length < 10) {
+			const existingIds = new Set(words.map(w => w.word));
+			const otherWords = this.settings.vocabulary
+				.filter(v => !existingIds.has(v.word))
+				.sort((a, b) => {
+					if (a.reviewCount !== b.reviewCount) return a.reviewCount - b.reviewCount;
+					return b.dateAdded - a.dateAdded;
+				});
+			
+			words = words.concat(otherWords.slice(0, 10 - words.length));
+		} else {
+			// Limit to 10 words
+			words = words.slice(0, 10);
+		}
 
 		if (words.length === 0) {
 			new Notice("No vocabulary words saved yet.");
@@ -126,6 +146,8 @@ export default class ImproveYourSentencePlugin extends Plugin {
 
 	async updateMultipleProgress(updates: string[]) {
 		let updatedCount = 0;
+		const now = Date.now();
+		
 		updates.forEach((word) => {
 			const item = this.settings.vocabulary.find(v => 
 				v.word.toLowerCase().trim().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "") === 
@@ -133,6 +155,20 @@ export default class ImproveYourSentencePlugin extends Plugin {
 			);
 			if (item) {
 				item.reviewCount = (item.reviewCount || 0) + 1;
+				
+				// Calculate next interval in days
+				let intervalDays = 1;
+				const count = item.reviewCount;
+				if (count === 1) intervalDays = 1;
+				else if (count === 2) intervalDays = 3;
+				else if (count === 3) intervalDays = 7;
+				else if (count === 4) intervalDays = 14;
+				else if (count === 5) intervalDays = 30;
+				else intervalDays = 60;
+
+				item.interval = intervalDays;
+				item.nextReview = now + (intervalDays * 24 * 60 * 60 * 1000);
+				
 				updatedCount++;
 			}
 		});
