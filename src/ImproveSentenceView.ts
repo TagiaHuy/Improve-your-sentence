@@ -268,6 +268,15 @@ export class ImproveSentenceView extends ItemView {
         return str.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").replace(/\s{2,}/g, " ").trim();
     }
 
+    shuffleArray<T>(array: T[]): T[] {
+        const newArray = [...array];
+        for (let i = newArray.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+        }
+        return newArray;
+    }
+
     async parseAndRenderInteractiveComponents(content: string, container: HTMLElement) {
         // 1. Try to find tagged JSON blocks first: ```json:type ... ```
         const taggedRegex = /```json:(flashcards|quiz|assessment|choice|scramble)\s*([\s\S]*?)\s*```/g;
@@ -407,7 +416,9 @@ export class ImproveSentenceView extends ItemView {
         const choiceWrapper = container.createDiv({ cls: 'choice-container' });
         const answers: Record<number, string> = {};
 
-        data.questions.forEach((q: any, idx: number) => {
+        const shuffledQuestions: any[] = this.shuffleArray(data.questions);
+
+        shuffledQuestions.forEach((q: any, idx: number) => {
             const questionDiv = choiceWrapper.createDiv({ cls: 'choice-question' });
             questionDiv.createEl('div', { cls: 'choice-definition', text: q.definition });
             
@@ -425,8 +436,8 @@ export class ImproveSentenceView extends ItemView {
         const submitBtn = choiceWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
         submitBtn.addEventListener('click', async () => {
             let userResponse = "Here are my answers for the Multiple Choice quiz:\n";
-            for (let idx = 0; idx < data.questions.length; idx++) {
-                const q = data.questions[idx];
+            for (let idx = 0; idx < shuffledQuestions.length; idx++) {
+                const q = shuffledQuestions[idx];
                 const userAnswer = answers[idx] || "(no answer selected)";
                 const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
                 
@@ -452,7 +463,9 @@ export class ImproveSentenceView extends ItemView {
         const scrambleWrapper = container.createDiv({ cls: 'scramble-container' });
         const answers: Record<number, string[]> = {};
 
-        data.tasks.forEach((task: any, idx: number) => {
+        const shuffledTasks: any[] = this.shuffleArray(data.tasks);
+
+        shuffledTasks.forEach((task: any, idx: number) => {
             const taskDiv = scrambleWrapper.createDiv({ cls: 'scramble-task' });
             const words = (typeof task.scrambled === 'string' ? task.scrambled.split(' ') : task.scrambled);
             const currentOrder = [...words].sort(() => Math.random() - 0.5);
@@ -495,8 +508,8 @@ export class ImproveSentenceView extends ItemView {
         const submitBtn = scrambleWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
         submitBtn.addEventListener('click', async () => {
             let userResponse = "Here are my answers for the Sentence Scramble:\n";
-            for (let idx = 0; idx < data.tasks.length; idx++) {
-                const task = data.tasks[idx];
+            for (let idx = 0; idx < shuffledTasks.length; idx++) {
+                const task: any = shuffledTasks[idx];
                 const userAnswer = (answers[idx] || []).join(' ');
                 const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(task.original);
                 
@@ -608,7 +621,9 @@ export class ImproveSentenceView extends ItemView {
     renderFlashcards(data: any, container: HTMLElement) {
         const flashcardWrapper = container.createDiv({ cls: 'flashcard-container' });
         
-        data.items.forEach((item: any) => {
+        const shuffledItems = this.shuffleArray(data.items);
+        
+        shuffledItems.forEach((item: any) => {
             const card = flashcardWrapper.createDiv({ cls: 'flashcard' });
             const front = card.createDiv({ cls: 'flashcard-front', text: item.word });
             const back = card.createDiv({ cls: 'flashcard-back' });
@@ -627,7 +642,9 @@ export class ImproveSentenceView extends ItemView {
         const quizWrapper = container.createDiv({ cls: 'quiz-container' });
         const answers: Record<number, string> = {};
 
-        data.questions.forEach((q: any, idx: number) => {
+        const shuffledQuestions: any[] = this.shuffleArray(data.questions);
+
+        shuffledQuestions.forEach((q: any, idx: number) => {
             const questionDiv = quizWrapper.createDiv({ cls: 'quiz-question' });
             
             // Handle [blank] or underscores in sentence
@@ -673,8 +690,8 @@ export class ImproveSentenceView extends ItemView {
         const submitBtn = quizWrapper.createEl('button', { text: 'Check Answers', cls: 'quiz-submit-btn' });
         submitBtn.addEventListener('click', async () => {
             let userResponse = "Here are my answers for the quiz (I've already highlighted them in the UI):\n";
-            for (let idx = 0; idx < data.questions.length; idx++) {
-                const q = data.questions[idx];
+            for (let idx = 0; idx < shuffledQuestions.length; idx++) {
+                const q = shuffledQuestions[idx];
                 const userAnswer = (answers[idx] || "").trim();
                 const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
                 

@@ -615,6 +615,14 @@ Error: ${e.toString()}`;
   normalizeAnswer(str) {
     return str.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").replace(/\s{2,}/g, " ").trim();
   }
+  shuffleArray(array) {
+    const newArray = [...array];
+    for (let i = newArray.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+    }
+    return newArray;
+  }
   async parseAndRenderInteractiveComponents(content, container) {
     const taggedRegex = /```json:(flashcards|quiz|assessment|choice|scramble)\s*([\s\S]*?)\s*```/g;
     const untaggedRegex = /```(?:json)?\s*([\s\S]*?)\s*```/g;
@@ -754,7 +762,8 @@ Error: ${e.toString()}`;
   renderChoice(data, container) {
     const choiceWrapper = container.createDiv({ cls: "choice-container" });
     const answers = {};
-    data.questions.forEach((q, idx) => {
+    const shuffledQuestions = this.shuffleArray(data.questions);
+    shuffledQuestions.forEach((q, idx) => {
       const questionDiv = choiceWrapper.createDiv({ cls: "choice-question" });
       questionDiv.createEl("div", { cls: "choice-definition", text: q.definition });
       const optionsWrapper = questionDiv.createDiv({ cls: "choice-options" });
@@ -770,8 +779,8 @@ Error: ${e.toString()}`;
     const submitBtn = choiceWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
     submitBtn.addEventListener("click", async () => {
       let userResponse = "Here are my answers for the Multiple Choice quiz:\n";
-      for (let idx = 0; idx < data.questions.length; idx++) {
-        const q = data.questions[idx];
+      for (let idx = 0; idx < shuffledQuestions.length; idx++) {
+        const q = shuffledQuestions[idx];
         const userAnswer = answers[idx] || "(no answer selected)";
         const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
         const questionDiv = choiceWrapper.querySelectorAll(".choice-question")[idx];
@@ -795,7 +804,8 @@ Error: ${e.toString()}`;
   renderScramble(data, container) {
     const scrambleWrapper = container.createDiv({ cls: "scramble-container" });
     const answers = {};
-    data.tasks.forEach((task, idx) => {
+    const shuffledTasks = this.shuffleArray(data.tasks);
+    shuffledTasks.forEach((task, idx) => {
       const taskDiv = scrambleWrapper.createDiv({ cls: "scramble-task" });
       const words = typeof task.scrambled === "string" ? task.scrambled.split(" ") : task.scrambled;
       const currentOrder = [...words].sort(() => Math.random() - 0.5);
@@ -833,8 +843,8 @@ Error: ${e.toString()}`;
     const submitBtn = scrambleWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
     submitBtn.addEventListener("click", async () => {
       let userResponse = "Here are my answers for the Sentence Scramble:\n";
-      for (let idx = 0; idx < data.tasks.length; idx++) {
-        const task = data.tasks[idx];
+      for (let idx = 0; idx < shuffledTasks.length; idx++) {
+        const task = shuffledTasks[idx];
         const userAnswer = (answers[idx] || []).join(" ");
         const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(task.original);
         const taskDiv = scrambleWrapper.querySelectorAll(".scramble-task")[idx];
@@ -933,7 +943,8 @@ Error: ${e.toString()}`;
   }
   renderFlashcards(data, container) {
     const flashcardWrapper = container.createDiv({ cls: "flashcard-container" });
-    data.items.forEach((item) => {
+    const shuffledItems = this.shuffleArray(data.items);
+    shuffledItems.forEach((item) => {
       const card = flashcardWrapper.createDiv({ cls: "flashcard" });
       const front = card.createDiv({ cls: "flashcard-front", text: item.word });
       const back = card.createDiv({ cls: "flashcard-back" });
@@ -949,7 +960,8 @@ Error: ${e.toString()}`;
   renderQuiz(data, container) {
     const quizWrapper = container.createDiv({ cls: "quiz-container" });
     const answers = {};
-    data.questions.forEach((q, idx) => {
+    const shuffledQuestions = this.shuffleArray(data.questions);
+    shuffledQuestions.forEach((q, idx) => {
       const questionDiv = quizWrapper.createDiv({ cls: "quiz-question" });
       const parts = q.sentence.split(/\[blank\]|_{3,}/g);
       const sentenceEl = questionDiv.createEl("div", { cls: "quiz-sentence" });
@@ -988,8 +1000,8 @@ Error: ${e.toString()}`;
     const submitBtn = quizWrapper.createEl("button", { text: "Check Answers", cls: "quiz-submit-btn" });
     submitBtn.addEventListener("click", async () => {
       let userResponse = "Here are my answers for the quiz (I've already highlighted them in the UI):\n";
-      for (let idx = 0; idx < data.questions.length; idx++) {
-        const q = data.questions[idx];
+      for (let idx = 0; idx < shuffledQuestions.length; idx++) {
+        const q = shuffledQuestions[idx];
         const userAnswer = (answers[idx] || "").trim();
         const isCorrect = this.normalizeAnswer(userAnswer) === this.normalizeAnswer(q.answer);
         const questionEl = quizWrapper.querySelectorAll(`.quiz-question`)[idx];
